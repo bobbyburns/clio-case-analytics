@@ -17,8 +17,9 @@ export function parseFilters(searchParams: Record<string, string | string[] | un
   }
 }
 
-function buildMatterQuery(supabase: SupabaseClient, filters: FilterState) {
+function buildMatterQuery(supabase: SupabaseClient, filters: FilterState, includeDisregarded = false) {
   let q = supabase.from("clio_matters").select("*")
+  if (!includeDisregarded) q = q.or("disregarded.is.null,disregarded.eq.false")
   if (filters.status.length > 0) q = q.in("status", filters.status)
   if (filters.caseType.length > 0) q = q.in("case_type", filters.caseType)
   if (filters.county.length > 0) q = q.in("county", filters.county)
@@ -30,13 +31,14 @@ function buildMatterQuery(supabase: SupabaseClient, filters: FilterState) {
 
 export async function fetchMatters(
   supabase: SupabaseClient,
-  filters: FilterState
+  filters: FilterState,
+  includeDisregarded = false,
 ): Promise<Matter[]> {
   const all: Matter[] = []
   const PAGE = 1000
   let offset = 0
   while (true) {
-    const { data, error } = await buildMatterQuery(supabase, filters)
+    const { data, error } = await buildMatterQuery(supabase, filters, includeDisregarded)
       .order("open_date", { ascending: false })
       .range(offset, offset + PAGE - 1)
     if (error) throw error

@@ -26,6 +26,7 @@ export interface Matter {
   total_expenses: number | null
   total_hours: number | null
   activity_count: number | null
+  disregarded: boolean | null
 }
 
 export interface Activity {
