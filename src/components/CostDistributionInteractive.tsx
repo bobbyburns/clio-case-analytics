@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo, useCallback } from "react"
+import { useState, useMemo, useCallback, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -35,6 +35,14 @@ export function CostDistributionInteractive({ matters: initialMatters }: Props) 
   const [activities, setActivities] = useState<Record<string, Activity[]>>({})
   const [loadingActivities, setLoadingActivities] = useState<string | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+
+  // Sync with server-provided data when filters change
+  useEffect(() => {
+    setMatters(initialMatters)
+    setSelectedBucket(null)
+    setExpandedId(null)
+    setSelectedIds(new Set())
+  }, [initialMatters])
   const [bulkSaving, setBulkSaving] = useState(false)
   const [showDisregarded, setShowDisregarded] = useState(false)
 
