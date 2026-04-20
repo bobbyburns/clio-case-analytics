@@ -21,7 +21,17 @@ function buildMatterQuery(supabase: SupabaseClient, filters: FilterState, includ
   let q = supabase.from("clio_matters").select("*")
   if (!includeDisregarded) q = q.or("disregarded.is.null,disregarded.eq.false")
   if (filters.status.length > 0) q = q.in("status", filters.status)
-  if (filters.caseType.length > 0) q = q.in("case_type", filters.caseType)
+  if (filters.caseType.length > 0) {
+    const hasNotMapped = filters.caseType.includes("Not Mapped")
+    const mapped = filters.caseType.filter((t) => t !== "Not Mapped")
+    if (hasNotMapped && mapped.length > 0) {
+      q = q.or(`mapped_category.in.(${mapped.map((t) => `"${t}"`).join(",")}),mapped_category.is.null`)
+    } else if (hasNotMapped) {
+      q = q.is("mapped_category", null)
+    } else {
+      q = q.in("mapped_category", mapped)
+    }
+  }
   if (filters.county.length > 0) q = q.in("county", filters.county)
   if (filters.attorney.length > 0) q = q.in("responsible_attorney", filters.attorney)
   if (filters.dateFrom) q = q.gte("open_date", filters.dateFrom)
@@ -87,13 +97,13 @@ export async function fetchActivities(
 }
 
 export async function fetchFilterOptions(supabase: SupabaseClient) {
-  const allMatters: Array<{ status: string; case_type: string; county: string; responsible_attorney: string }> = []
+  const allMatters: Array<{ status: string; case_type: string; county: string; responsible_attorney: string; mapped_category: string | null }> = []
   const PAGE = 1000
   let offset = 0
   while (true) {
     const { data } = await supabase
       .from("clio_matters")
-      .select("status, case_type, county, responsible_attorney")
+      .select("status, case_type, county, responsible_attorney, mapped_category")
       .range(offset, offset + PAGE - 1)
     if (!data || data.length === 0) break
     allMatters.push(...data)
@@ -102,7 +112,12 @@ export async function fetchFilterOptions(supabase: SupabaseClient) {
   }
 
   const statuses = [...new Set(allMatters.map((m) => m.status).filter(Boolean))].sort()
-  const caseTypes = [...new Set(allMatters.map((m) => m.case_type).filter(Boolean))].sort()
+
+  // Use mapped_category for case type filter; add "Not Mapped" for nulls
+  const mappedCategories = [...new Set(allMatters.map((m) => m.mapped_category).filter(Boolean) as string[])].sort()
+  const hasUnmapped = allMatters.some((m) => !m.mapped_category)
+  const caseTypes = hasUnmapped ? [...mappedCategories, "Not Mapped"] : mappedCategories
+
   const counties = [...new Set(allMatters.map((m) => m.county).filter(Boolean))].sort()
   const attorneys = [
     ...new Set(allMatters.map((m) => m.responsible_attorney).filter(Boolean)),

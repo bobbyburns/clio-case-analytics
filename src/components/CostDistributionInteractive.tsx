@@ -417,7 +417,7 @@ function CaseRow({
         <TableCell onClick={onToggleExpand}>
           <StatusBadge status={m.status} />
         </TableCell>
-        <TableCell className="text-sm" onClick={onToggleExpand}>{m.case_type ?? "-"}</TableCell>
+        <TableCell className="text-sm" onClick={onToggleExpand}>{m.mapped_category ?? m.case_type ?? "-"}</TableCell>
         <TableCell className="text-right font-medium text-sm" onClick={onToggleExpand}>
           {formatCurrency(m.total_billable)}
         </TableCell>

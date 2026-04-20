@@ -27,6 +27,7 @@ export interface Matter {
   total_hours: number | null
   activity_count: number | null
   disregarded: boolean | null
+  mapped_category: string | null
 }
 
 export interface Activity {
