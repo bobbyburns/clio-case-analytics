@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server"
 import { parseFilters, fetchMatters } from "@/lib/queries"
 import { median } from "@/lib/utils/stats"
+import { formatCurrency } from "@/lib/utils/format"
 import {
   ChildrenCostChart,
   CountyCostChart,
@@ -9,6 +10,7 @@ import {
   AttorneyCostChart,
   RetainerCostChart,
 } from "@/components/charts/CostDriversCharts"
+import { AIChatAssistant } from "@/components/AIChatAssistant"
 
 function groupByMedianCost(
   matters: { key: string; cost: number }[]
@@ -88,6 +90,21 @@ export default async function CostDriversPage({
       .map((m) => ({ key: m.retainer_type!, cost: m.total_billable ?? 0 }))
   )
 
+  const pageContext = `Page: Cost Drivers Analysis
+Analyzing median costs broken down by key case attributes across ${withCost.length} matters with billable amounts.
+
+By Number of Children: ${childrenData.map((d) => `${d.name} children: ${formatCurrency(d.medianCost)} median (${d.count} cases)`).join("; ")}
+
+By Opposing Counsel: ${opposingData.map((d) => `${d.name}: ${formatCurrency(d.medianCost)} median (${d.count} cases)`).join("; ")}
+
+Top Counties by Median Cost: ${countyData.map((d) => `${d.name}: ${formatCurrency(d.medianCost)} (${d.count} cases)`).join("; ")}
+
+Top Case Types by Median Cost: ${caseTypeData.map((d) => `${d.name}: ${formatCurrency(d.medianCost)} (${d.count} cases)`).join("; ")}
+
+By Attorney: ${attorneyData.map((d) => `${d.name}: ${formatCurrency(d.medianCost)} (${d.count} cases)`).join("; ")}
+
+By Retainer Type: ${retainerData.map((d) => `${d.name}: ${formatCurrency(d.medianCost)} (${d.count} cases)`).join("; ")}`
+
   return (
     <div className="space-y-6">
       <div>
@@ -105,6 +122,8 @@ export default async function CostDriversPage({
         <AttorneyCostChart data={attorneyData} />
         <RetainerCostChart data={retainerData} />
       </div>
+
+      <AIChatAssistant pageContext={pageContext} />
     </div>
   )
 }

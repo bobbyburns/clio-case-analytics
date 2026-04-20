@@ -27,30 +27,46 @@ export function stdDev(arr: number[]): number {
   return Math.sqrt(squaredDiffs.reduce((sum, v) => sum + v, 0) / (arr.length - 1))
 }
 
-export function histogram(arr: number[], bins: number = 20): HistogramBin[] {
+/** Fixed-bucket histogram with meaningful dollar ranges. */
+export function histogram(arr: number[], _bins: number = 20): HistogramBin[] {
   if (arr.length === 0) return []
-  const sorted = [...arr].sort((a, b) => a - b)
-  const min = sorted[0]
-  const max = sorted[sorted.length - 1]
-  if (min === max) {
-    return [{ binStart: min, binEnd: max, label: `${min}`, count: arr.length }]
+
+  const BUCKETS = [
+    [0, 1000, "<$1k"],
+    [1000, 2500, "$1k–$2.5k"],
+    [2500, 5000, "$2.5k–$5k"],
+    [5000, 7500, "$5k–$7.5k"],
+    [7500, 10000, "$7.5k–$10k"],
+    [10000, 15000, "$10k–$15k"],
+    [15000, 20000, "$15k–$20k"],
+    [20000, 30000, "$20k–$30k"],
+    [30000, 50000, "$30k–$50k"],
+    [50000, 75000, "$50k–$75k"],
+    [75000, 100000, "$75k–$100k"],
+    [100000, Infinity, "$100k+"],
+  ] as const
+
+  const result: HistogramBin[] = BUCKETS.map(([lo, hi, label]) => ({
+    binStart: lo,
+    binEnd: hi === Infinity ? 999999999 : hi,
+    label,
+    count: 0,
+  }))
+
+  for (const value of arr) {
+    for (let i = 0; i < BUCKETS.length; i++) {
+      if (value >= BUCKETS[i][0] && value < BUCKETS[i][1]) {
+        result[i].count++
+        break
+      }
+    }
   }
-  const binWidth = (max - min) / bins
-  const result: HistogramBin[] = []
-  for (let i = 0; i < bins; i++) {
-    const binStart = min + i * binWidth
-    const binEnd = i === bins - 1 ? max + 0.01 : min + (i + 1) * binWidth
-    result.push({
-      binStart,
-      binEnd,
-      label: `${Math.round(binStart)}`,
-      count: 0,
-    })
+
+  // Trim trailing empty buckets
+  while (result.length > 1 && result[result.length - 1].count === 0) {
+    result.pop()
   }
-  for (const value of sorted) {
-    const binIndex = Math.min(Math.floor((value - min) / binWidth), bins - 1)
-    result[binIndex].count++
-  }
+
   return result
 }
 

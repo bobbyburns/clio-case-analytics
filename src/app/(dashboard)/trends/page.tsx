@@ -1,11 +1,13 @@
 import { createClient } from "@/lib/supabase/server"
 import { parseFilters, fetchMatters } from "@/lib/queries"
 import { mean } from "@/lib/utils/stats"
+import { formatCurrency } from "@/lib/utils/format"
 import {
   CasesPerQuarter,
   AvgCostPerQuarter,
   RevenuePerQuarter,
 } from "@/components/charts/TrendsCharts"
+import { AIChatAssistant } from "@/components/AIChatAssistant"
 
 function toQuarter(dateStr: string): string {
   const d = new Date(dateStr)
@@ -67,6 +69,15 @@ export default async function TrendsPage({
     revenue: Math.round(revenueMap.get(period) ?? 0),
   }))
 
+  const pageContext = `Page: Quarterly Trends
+Tracking trends across ${matters.length} matters over ${allQuarters.length} quarters.
+
+Cases Opened/Closed per Quarter: ${casesData.map((d) => `${d.period}: ${d.opened} opened, ${d.closed} closed`).join("; ")}
+
+Average Cost per Quarter: ${costData.map((d) => `${d.period}: ${formatCurrency(d.avgCost)}`).join("; ")}
+
+Revenue per Quarter: ${revenueData.map((d) => `${d.period}: ${formatCurrency(d.revenue)}`).join("; ")}`
+
   return (
     <div className="space-y-6">
       <div>
@@ -82,6 +93,8 @@ export default async function TrendsPage({
         <AvgCostPerQuarter data={costData} />
         <RevenuePerQuarter data={revenueData} />
       </div>
+
+      <AIChatAssistant pageContext={pageContext} />
     </div>
   )
 }

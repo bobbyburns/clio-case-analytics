@@ -5,6 +5,7 @@ import { CostDistributionSummary, CasesOverTime } from "@/components/charts/Over
 import { median } from "@/lib/utils/stats"
 import { histogram } from "@/lib/utils/stats"
 import { formatCurrency, formatNumber } from "@/lib/utils/format"
+import { AIChatAssistant } from "@/components/AIChatAssistant"
 
 export default async function OverviewPage({
   searchParams,
@@ -52,6 +53,18 @@ export default async function OverviewPage({
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([period, count]) => ({ period, count }))
 
+  const pageContext = `Page: Overview Dashboard
+Key Metrics:
+- Total Matters: ${formatNumber(totalMatters)}
+- Closed Matters: ${formatNumber(totalClosed)}
+- Active/Open Cases: ${formatNumber(openMatters.length)}
+- Median Cost per Matter: ${formatCurrency(medianCost)}
+- Median Duration (closed cases): ${medianDurationMonths.toFixed(1)} months
+- Total Revenue: ${formatCurrency(totalRevenue)}
+
+Cost Distribution: ${costDistData.map((d) => `${d.label}: ${d.count} cases`).join(", ")}
+Cases Over Time (quarterly): ${casesOverTime.map((d) => `${d.period}: ${d.count}`).join(", ")}`
+
   return (
     <div className="space-y-6">
       <div>
@@ -77,6 +90,8 @@ export default async function OverviewPage({
         <CostDistributionSummary data={costDistData} />
         <CasesOverTime data={casesOverTime} />
       </div>
+
+      <AIChatAssistant pageContext={pageContext} />
     </div>
   )
 }

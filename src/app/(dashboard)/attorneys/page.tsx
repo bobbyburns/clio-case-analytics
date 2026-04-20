@@ -1,8 +1,10 @@
 import { createClient } from "@/lib/supabase/server"
 import { parseFilters, fetchMatters } from "@/lib/queries"
 import { mean } from "@/lib/utils/stats"
+import { formatCurrency, formatNumber, formatDuration } from "@/lib/utils/format"
 import { RevenueByAttorney } from "@/components/charts/AttorneyCharts"
 import { AttorneyTableClient } from "@/components/charts/AttorneyTable"
+import { AIChatAssistant } from "@/components/AIChatAssistant"
 
 export default async function AttorneysPage({
   searchParams,
@@ -56,6 +58,12 @@ export default async function AttorneysPage({
     revenue: d.totalRevenue,
   }))
 
+  const pageContext = `Page: Attorney Performance
+Analyzing performance metrics across ${tableData.length} attorneys for ${formatNumber(matters.length)} total matters.
+
+Attorney Breakdown (sorted by revenue):
+${tableData.map((d) => `- ${d.name}: ${d.caseCount} cases, ${formatCurrency(d.totalRevenue)} total revenue, ${formatCurrency(d.avgCost)} avg cost/case, ${formatDuration(d.avgDuration)} avg duration`).join("\n")}`
+
   return (
     <div className="space-y-6">
       <div>
@@ -67,6 +75,8 @@ export default async function AttorneysPage({
 
       <RevenueByAttorney data={chartData} />
       <AttorneyTableClient data={tableData} />
+
+      <AIChatAssistant pageContext={pageContext} />
     </div>
   )
 }

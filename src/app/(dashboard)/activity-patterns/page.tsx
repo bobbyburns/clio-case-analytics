@@ -1,11 +1,13 @@
 import { createClient } from "@/lib/supabase/server"
 import { parseFilters, fetchActivities } from "@/lib/queries"
+import { formatCurrency, formatNumber } from "@/lib/utils/format"
 import {
   ActivityTypePie,
   BillableVsNonBillable,
   TopUsersByBillable,
   FlatRateBreakdown,
 } from "@/components/charts/ActivityCharts"
+import { AIChatAssistant } from "@/components/AIChatAssistant"
 
 export default async function ActivityPatternsPage({
   searchParams,
@@ -67,6 +69,31 @@ export default async function ActivityPatternsPage({
     { name: "Hourly", value: hourlyCount },
   ]
 
+  const totalBillableAmount = activities.reduce(
+    (sum, a) => sum + (a.billable_amount ?? 0),
+    0
+  )
+
+  const pageContext = `Page: Activity Patterns
+Analyzing ${formatNumber(activities.length)} activity entries.
+
+Activity Type Split:
+- Time Entries: ${formatNumber(timeEntries.length)}
+- Expense Entries: ${formatNumber(expenseEntries.length)}
+
+Billable vs Non-Billable Hours:
+- Billable Hours: ${billableData[0].billable}
+- Non-Billable Hours: ${billableData[0].nonBillable}
+- Billable Ratio: ${((billableData[0].billable / (billableData[0].billable + billableData[0].nonBillable)) * 100).toFixed(1)}%
+
+Total Billable Amount: ${formatCurrency(totalBillableAmount)}
+
+Rate Structure:
+- Flat Rate Entries: ${formatNumber(flatRateCount)}
+- Hourly Entries: ${formatNumber(hourlyCount)}
+
+Top Users by Billable Amount: ${topUsers.map((u) => `${u.name}: ${formatCurrency(u.amount)}`).join("; ")}`
+
   return (
     <div className="space-y-6">
       <div>
@@ -82,6 +109,8 @@ export default async function ActivityPatternsPage({
         <BillableVsNonBillable data={billableData} />
         <TopUsersByBillable data={topUsers} />
       </div>
+
+      <AIChatAssistant pageContext={pageContext} />
     </div>
   )
 }

@@ -12,6 +12,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { AIChatAssistant } from "@/components/AIChatAssistant"
 
 export default async function CostDistributionPage({
   searchParams,
@@ -33,6 +34,24 @@ export default async function CostDistributionPage({
   const sortedMatters = [...matters]
     .filter((m) => (m.total_billable ?? 0) > 0)
     .sort((a, b) => (b.total_billable ?? 0) - (a.total_billable ?? 0))
+
+  const pageContext = `Page: Cost Distribution Analysis
+Analyzing ${billableAmounts.length} matters with billable amounts.
+
+Statistical Summary:
+- Count: ${formatNumber(stats.count)}
+- Min: ${formatCurrency(stats.min)}
+- P10: ${formatCurrency(stats.p10)}
+- P25 (25th percentile): ${formatCurrency(stats.p25)}
+- Median (P50): ${formatCurrency(stats.p50)}
+- P75 (75th percentile): ${formatCurrency(stats.p75)}
+- P90: ${formatCurrency(stats.p90)}
+- Max: ${formatCurrency(stats.max)}
+- Mean (average): ${formatCurrency(stats.mean)}
+- Standard Deviation: ${formatCurrency(stats.stdDev)}
+
+The histogram shows ${bins.length} bins of cost distribution. The spread between mean (${formatCurrency(stats.mean)}) and median (${formatCurrency(stats.p50)}) indicates the shape of the distribution.
+Top 5 most expensive cases: ${sortedMatters.slice(0, 5).map((m) => `${m.display_number}: ${formatCurrency(m.total_billable)}`).join(", ")}`
 
   return (
     <div className="space-y-6">
@@ -119,6 +138,8 @@ export default async function CostDistributionPage({
           )}
         </CardContent>
       </Card>
+
+      <AIChatAssistant pageContext={pageContext} />
     </div>
   )
 }

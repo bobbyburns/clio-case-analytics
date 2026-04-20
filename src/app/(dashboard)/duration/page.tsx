@@ -1,9 +1,10 @@
 import { createClient } from "@/lib/supabase/server"
 import { parseFilters, fetchMatters } from "@/lib/queries"
 import { computeStats, histogram, mean } from "@/lib/utils/stats"
-import { formatNumber, formatDuration } from "@/lib/utils/format"
+import { formatNumber, formatDuration, formatCurrency } from "@/lib/utils/format"
 import { DurationHistogram, DurationVsCostScatter } from "@/components/charts/DurationCharts"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { AIChatAssistant } from "@/components/AIChatAssistant"
 
 function linearRegression(points: { x: number; y: number }[]) {
   if (points.length < 2) return { slope: 0, intercept: 0 }
@@ -50,6 +51,25 @@ export default async function DurationPage({
     scatterData.map((d) => ({ x: d.durationMonths, y: d.cost }))
   )
 
+  const pageContext = `Page: Duration Analysis
+Analyzing case durations across ${closedMatters.length} closed matters.
+
+Duration Statistics:
+- Count: ${formatNumber(stats.count)}
+- Min: ${formatDuration(stats.min)}
+- P10: ${formatDuration(stats.p10)}
+- P25: ${formatDuration(stats.p25)}
+- Median (P50): ${formatDuration(stats.p50)}
+- P75: ${formatDuration(stats.p75)}
+- P90: ${formatDuration(stats.p90)}
+- Max: ${formatDuration(stats.max)}
+- Mean: ${formatDuration(stats.mean)}
+- Std Dev: ${formatDuration(stats.stdDev)}
+
+Duration vs Cost Scatter: ${scatterData.length} data points plotted.
+Linear regression trend: for each additional month of duration, cost changes by approximately ${formatCurrency(regression.slope)} (slope=${regression.slope.toFixed(2)}, intercept=${formatCurrency(regression.intercept)}).
+The histogram has ${bins.length} bins showing the distribution of case durations.`
+
   return (
     <div className="space-y-6">
       <div>
@@ -87,6 +107,8 @@ export default async function DurationPage({
           </div>
         </CardContent>
       </Card>
+
+      <AIChatAssistant pageContext={pageContext} />
     </div>
   )
 }
