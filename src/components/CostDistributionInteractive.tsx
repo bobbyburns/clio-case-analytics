@@ -199,8 +199,9 @@ export function CostDistributionInteractive({ matters: initialMatters }: Props) 
                 dataKey="count"
                 radius={[4, 4, 0, 0]}
                 cursor="pointer"
-                onClick={(_data, index) => {
-                  const clickedLabel = bins[index]?.label
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                onClick={(entry: any) => {
+                  const clickedLabel = entry?.label as string | undefined
                   if (!clickedLabel) return
                   setSelectedBucket(
                     selectedBucket === clickedLabel ? null : clickedLabel
