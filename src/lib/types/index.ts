@@ -1,6 +1,6 @@
 export interface Matter {
   id: number
-  unique_id: number
+  unique_id: string
   display_number: string
   description: string | null
   status: "Open" | "Closed" | "Pending"
