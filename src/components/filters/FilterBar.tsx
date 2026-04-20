@@ -1,7 +1,7 @@
 "use client"
 
 import { useRouter, useSearchParams, usePathname } from "next/navigation"
-import { useCallback, useTransition } from "react"
+import { useCallback, useEffect, useRef, useState, useTransition } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -128,6 +128,21 @@ function MultiSelect({
   selected: string[]
   onChange: (values: string[]) => void
 }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener("mousedown", handler)
+    return () => document.removeEventListener("mousedown", handler)
+  }, [open])
+
   const toggleOption = (opt: string) => {
     if (selected.includes(opt)) {
       onChange(selected.filter((s) => s !== opt))
@@ -139,30 +154,18 @@ function MultiSelect({
   return (
     <div className="flex flex-col gap-1">
       <Label className="text-xs text-muted-foreground">{label}</Label>
-      <div className="relative">
-        <select
-          multiple
-          value={selected}
-          onChange={(e) => {
-            const values = Array.from(e.target.selectedOptions, (o) => o.value)
-            onChange(values)
-          }}
-          className="hidden"
-        />
-        <div className="relative group">
-          <button
-            type="button"
-            className="flex items-center gap-1 h-8 px-2.5 text-sm rounded-lg border border-input bg-transparent hover:bg-muted transition-colors"
-            onClick={(e) => {
-              const menu = e.currentTarget.nextElementSibling
-              if (menu) menu.classList.toggle("hidden")
-            }}
-          >
-            <span className="text-muted-foreground">
-              {selected.length === 0 ? `All ${label}` : `${selected.length} selected`}
-            </span>
-          </button>
-          <div className="hidden absolute z-50 top-full left-0 mt-1 w-56 max-h-60 overflow-y-auto bg-popover rounded-lg shadow-md ring-1 ring-foreground/10 p-1">
+      <div className="relative" ref={ref}>
+        <button
+          type="button"
+          className="flex items-center gap-1 h-8 px-2.5 text-sm rounded-lg border border-input bg-transparent hover:bg-muted transition-colors"
+          onClick={() => setOpen(!open)}
+        >
+          <span className="text-muted-foreground">
+            {selected.length === 0 ? `All ${label}` : `${selected.length} selected`}
+          </span>
+        </button>
+        {open && (
+          <div className="absolute z-50 top-full left-0 mt-1 w-56 max-h-60 overflow-y-auto bg-popover rounded-lg shadow-md ring-1 ring-foreground/10 p-1">
             {options.map((opt) => (
               <button
                 key={opt}
@@ -190,7 +193,7 @@ function MultiSelect({
               <span className="block px-2 py-1.5 text-sm text-muted-foreground">No options</span>
             )}
           </div>
-        </div>
+        )}
       </div>
     </div>
   )

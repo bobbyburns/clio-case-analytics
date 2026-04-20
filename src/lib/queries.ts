@@ -25,7 +25,7 @@ function buildMatterQuery(supabase: SupabaseClient, filters: FilterState, includ
     const hasNotMapped = filters.caseType.includes("Not Mapped")
     const mapped = filters.caseType.filter((t) => t !== "Not Mapped")
     if (hasNotMapped && mapped.length > 0) {
-      q = q.or(`mapped_category.in.(${mapped.map((t) => `"${t}"`).join(",")}),mapped_category.is.null`)
+      q = q.or(`mapped_category.in.(${mapped.join(",")}),mapped_category.is.null`)
     } else if (hasNotMapped) {
       q = q.is("mapped_category", null)
     } else {
