@@ -314,7 +314,7 @@ export function CostDistributionInteractive({ matters: initialMatters }: Props) 
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-10">
+                <TableHead className="w-10 pl-3">
                   <button onClick={toggleSelectAll} className="p-1">
                     {selectedIds.size === displayMatters.length && displayMatters.length > 0 ? (
                       <CheckSquare className="size-4 text-blue-600" />
@@ -323,15 +323,11 @@ export function CostDistributionInteractive({ matters: initialMatters }: Props) 
                     )}
                   </button>
                 </TableHead>
-                <TableHead className="w-8" />
                 <TableHead>Case</TableHead>
-                <TableHead>Client</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Case Type</TableHead>
-                <TableHead>Attorney</TableHead>
-                <TableHead className="text-right">Total Billable</TableHead>
-                <TableHead className="text-right">Hours</TableHead>
-                <TableHead className="w-24">Actions</TableHead>
+                <TableHead className="text-right">Billable</TableHead>
+                <TableHead className="w-20" />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -352,7 +348,7 @@ export function CostDistributionInteractive({ matters: initialMatters }: Props) 
               ))}
               {displayMatters.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={10} className="text-center py-8 text-muted-foreground">
+                  <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
                     No cases in this range
                   </TableCell>
                 </TableRow>
@@ -389,68 +385,56 @@ function CaseRow({
       <TableRow
         className={`cursor-pointer ${m.disregarded ? "opacity-40" : ""} ${isSelected ? "bg-blue-50" : ""}`}
       >
-        <TableCell>
-          <button onClick={(e) => { e.stopPropagation(); onToggleSelect() }} className="p-1">
-            {isSelected ? (
-              <CheckSquare className="size-4 text-blue-600" />
-            ) : (
-              <Square className="size-4 text-muted-foreground" />
+        <TableCell className="pl-3">
+          <div className="flex items-center gap-1">
+            <button onClick={(e) => { e.stopPropagation(); onToggleSelect() }} className="p-0.5">
+              {isSelected ? (
+                <CheckSquare className="size-4 text-blue-600" />
+              ) : (
+                <Square className="size-4 text-muted-foreground" />
+              )}
+            </button>
+            <button onClick={onToggleExpand} className="p-0.5">
+              {isExpanded ? (
+                <ChevronDown className="size-4 text-muted-foreground" />
+              ) : (
+                <ChevronRight className="size-4 text-muted-foreground" />
+              )}
+            </button>
+          </div>
+        </TableCell>
+        <TableCell onClick={onToggleExpand}>
+          <div className="text-sm font-medium leading-tight">
+            {m.display_number}
+            {m.disregarded && (
+              <Badge variant="outline" className="ml-2 text-[10px]">Disregarded</Badge>
             )}
-          </button>
-        </TableCell>
-        <TableCell>
-          <button onClick={onToggleExpand} className="p-1">
-            {isExpanded ? (
-              <ChevronDown className="size-4 text-muted-foreground" />
-            ) : (
-              <ChevronRight className="size-4 text-muted-foreground" />
-            )}
-          </button>
-        </TableCell>
-        <TableCell className="font-medium text-sm" onClick={onToggleExpand}>
-          {m.display_number}
-          {m.disregarded && (
-            <Badge variant="outline" className="ml-2 text-[10px]">
-              Disregarded
-            </Badge>
-          )}
-        </TableCell>
-        <TableCell className="max-w-32 truncate text-sm" onClick={onToggleExpand}>
-          {m.clients ?? "-"}
+          </div>
+          <div className="text-xs text-muted-foreground mt-0.5 truncate max-w-xs">
+            {[m.clients, m.responsible_attorney].filter(Boolean).join(" · ")}
+          </div>
         </TableCell>
         <TableCell onClick={onToggleExpand}>
           <StatusBadge status={m.status} />
         </TableCell>
         <TableCell className="text-sm" onClick={onToggleExpand}>{m.case_type ?? "-"}</TableCell>
-        <TableCell className="text-sm" onClick={onToggleExpand}>{m.responsible_attorney ?? "-"}</TableCell>
         <TableCell className="text-right font-medium text-sm" onClick={onToggleExpand}>
           {formatCurrency(m.total_billable)}
-        </TableCell>
-        <TableCell className="text-right text-sm" onClick={onToggleExpand}>
-          {formatNumber(m.total_hours)}
         </TableCell>
         <TableCell>
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 text-xs"
+            className="h-7 text-xs px-2"
             onClick={(e) => { e.stopPropagation(); onToggleDisregard() }}
           >
-            {m.disregarded ? (
-              <>
-                <Eye className="size-3 mr-1" /> Restore
-              </>
-            ) : (
-              <>
-                <EyeOff className="size-3 mr-1" /> Disregard
-              </>
-            )}
+            {m.disregarded ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
           </Button>
         </TableCell>
       </TableRow>
       {isExpanded && (
         <TableRow>
-          <TableCell colSpan={10} className="bg-slate-50 p-0">
+          <TableCell colSpan={6} className="bg-slate-50 p-0">
             <div className="px-6 py-3 max-h-80 overflow-y-auto">
               {isLoadingActivities ? (
                 <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
