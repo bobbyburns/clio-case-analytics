@@ -15,6 +15,7 @@ export function parseFilters(searchParams: Record<string, string | string[] | un
     dateFrom: (typeof searchParams.dateFrom === "string" ? searchParams.dateFrom : null) || null,
     dateTo: (typeof searchParams.dateTo === "string" ? searchParams.dateTo : null) || null,
     minBillable: typeof searchParams.minBillable === "string" ? Number(searchParams.minBillable) || null : null,
+    maxBillable: typeof searchParams.maxBillable === "string" ? Number(searchParams.maxBillable) || null : null,
   }
 }
 
@@ -38,6 +39,7 @@ function buildMatterQuery(supabase: SupabaseClient, filters: FilterState, includ
   if (filters.dateFrom) q = q.gte("open_date", filters.dateFrom)
   if (filters.dateTo) q = q.lte("open_date", filters.dateTo)
   if (filters.minBillable != null && filters.minBillable > 0) q = q.gte("total_billable", filters.minBillable)
+  if (filters.maxBillable != null && filters.maxBillable > 0) q = q.lte("total_billable", filters.maxBillable)
   return q
 }
 

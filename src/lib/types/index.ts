@@ -57,6 +57,7 @@ export interface FilterState {
   dateFrom: string | null
   dateTo: string | null
   minBillable: number | null
+  maxBillable: number | null
 }
 
 export interface StatsResult {

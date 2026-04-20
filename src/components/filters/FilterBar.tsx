@@ -100,6 +100,16 @@ export function FilterBar({ statuses, caseTypes, counties, attorneys }: FilterBa
         />
       </div>
       <div className="flex flex-col gap-1">
+        <Label className="text-xs text-muted-foreground">Max Billable</Label>
+        <Input
+          type="number"
+          className="w-28 h-8"
+          placeholder="No max"
+          value={searchParams.get("maxBillable") ?? ""}
+          onChange={(e) => updateDateParam("maxBillable", e.target.value)}
+        />
+      </div>
+      <div className="flex flex-col gap-1">
         <Label className="text-xs text-muted-foreground">From</Label>
         <Input
           type="date"
