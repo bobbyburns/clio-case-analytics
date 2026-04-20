@@ -56,6 +56,7 @@ export interface FilterState {
   attorney: string[]
   dateFrom: string | null
   dateTo: string | null
+  minBillable: number | null
 }
 
 export interface StatsResult {

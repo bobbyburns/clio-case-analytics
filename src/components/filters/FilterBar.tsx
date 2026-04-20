@@ -90,6 +90,16 @@ export function FilterBar({ statuses, caseTypes, counties, attorneys }: FilterBa
         onChange={(v) => updateParam("attorney", v)}
       />
       <div className="flex flex-col gap-1">
+        <Label className="text-xs text-muted-foreground">Min Billable</Label>
+        <Input
+          type="number"
+          className="w-28 h-8"
+          placeholder="$0"
+          value={searchParams.get("minBillable") ?? ""}
+          onChange={(e) => updateDateParam("minBillable", e.target.value)}
+        />
+      </div>
+      <div className="flex flex-col gap-1">
         <Label className="text-xs text-muted-foreground">From</Label>
         <Input
           type="date"

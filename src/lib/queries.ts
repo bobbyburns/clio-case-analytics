@@ -14,6 +14,7 @@ export function parseFilters(searchParams: Record<string, string | string[] | un
     attorney: toArray(searchParams.attorney),
     dateFrom: (typeof searchParams.dateFrom === "string" ? searchParams.dateFrom : null) || null,
     dateTo: (typeof searchParams.dateTo === "string" ? searchParams.dateTo : null) || null,
+    minBillable: typeof searchParams.minBillable === "string" ? Number(searchParams.minBillable) || null : null,
   }
 }
 
@@ -36,6 +37,7 @@ function buildMatterQuery(supabase: SupabaseClient, filters: FilterState, includ
   if (filters.attorney.length > 0) q = q.in("responsible_attorney", filters.attorney)
   if (filters.dateFrom) q = q.gte("open_date", filters.dateFrom)
   if (filters.dateTo) q = q.lte("open_date", filters.dateTo)
+  if (filters.minBillable != null && filters.minBillable > 0) q = q.gte("total_billable", filters.minBillable)
   return q
 }
 
