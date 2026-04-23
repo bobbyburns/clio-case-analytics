@@ -899,6 +899,8 @@ export function ClientsInteractive({
                 </TableHead>
                 <TableHead>First Activity</TableHead>
                 <TableHead>Last Activity</TableHead>
+                <TableHead>First Matter Open</TableHead>
+                <TableHead>Last Matter Open</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -914,7 +916,7 @@ export function ClientsInteractive({
               ))}
               {visible.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={10} className="text-center py-8 text-muted-foreground">
+                  <TableCell colSpan={12} className="text-center py-8 text-muted-foreground">
                     No clients match this filter
                   </TableCell>
                 </TableRow>
@@ -1053,10 +1055,16 @@ function ScenarioClientRow({
         <TableCell className="text-xs text-muted-foreground">
           {r.lastActivityDate ?? "—"}
         </TableCell>
+        <TableCell className="text-xs text-muted-foreground">
+          {r.firstMatterOpenDate ?? "—"}
+        </TableCell>
+        <TableCell className="text-xs text-muted-foreground">
+          {r.lastMatterOpenDate ?? "—"}
+        </TableCell>
       </TableRow>
       {isExpanded && (
         <TableRow>
-          <TableCell colSpan={10} className="bg-slate-50 p-0">
+          <TableCell colSpan={12} className="bg-slate-50 p-0">
             <div className="px-6 py-4 space-y-4">
               {/* Matter summary */}
               <div>
