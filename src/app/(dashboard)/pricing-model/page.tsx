@@ -19,6 +19,7 @@ const DEFAULT_RETAINER = 1500
 const TOP_CLIENTS_COUNT = 10
 
 export const maxDuration = 60
+export const revalidate = 300
 
 export default async function PricingModelPage({
   searchParams,
@@ -163,7 +164,8 @@ Top 5 clients by avg monthly value: ${clientLeaderboard
 }
 
 /** Fetch only the activity columns this page needs, scoped to the supplied matter IDs.
- *  Chunks the IN() clause to stay under PostgREST URL limits and avoids full-table scans. */
+ *  Chunks the IN() clause to stay under PostgREST URL limits. Chunks run in parallel
+ *  (bounded concurrency) so total latency is ~one chunk's worth, not N chunks'. */
 async function fetchPricingActivities(
   supabase: SupabaseClient,
   matterIds: string[],
@@ -175,10 +177,15 @@ async function fetchPricingActivities(
     "matter_unique_id,activity_date,billable_amount,flat_rate,hours,rate,type,user_name,description,bill_state,nonbillable_amount"
   const ID_CHUNK = 100
   const PAGE = 1000
-  const all: Activity[] = []
+  const CONCURRENCY = 8
 
+  const chunks: string[][] = []
   for (let i = 0; i < matterIds.length; i += ID_CHUNK) {
-    const idChunk = matterIds.slice(i, i + ID_CHUNK)
+    chunks.push(matterIds.slice(i, i + ID_CHUNK))
+  }
+
+  async function fetchChunk(idChunk: string[]): Promise<Activity[]> {
+    const out: Activity[] = []
     let offset = 0
     while (true) {
       let q = supabase.from("clio_activities").select(COLS).in("matter_unique_id", idChunk)
@@ -189,10 +196,18 @@ async function fetchPricingActivities(
         .range(offset, offset + PAGE - 1)
       if (error) throw error
       if (!data || data.length === 0) break
-      all.push(...(data as unknown as Activity[]))
+      out.push(...(data as unknown as Activity[]))
       if (data.length < PAGE) break
       offset += PAGE
     }
+    return out
+  }
+
+  const all: Activity[] = []
+  for (let i = 0; i < chunks.length; i += CONCURRENCY) {
+    const batch = chunks.slice(i, i + CONCURRENCY)
+    const results = await Promise.all(batch.map(fetchChunk))
+    for (const arr of results) all.push(...arr)
   }
   return all
 }
