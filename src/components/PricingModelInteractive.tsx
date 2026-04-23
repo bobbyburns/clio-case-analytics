@@ -708,10 +708,20 @@ function DeltaRow({
             <ChevronRight className="size-4 text-muted-foreground" />
           )}
         </TableCell>
-        <TableCell className="text-sm font-medium">{matter.display_number}</TableCell>
-        <TableCell className="text-sm max-w-xs truncate">{clientDisplay}</TableCell>
+        <TableCell className="text-sm font-medium">
+          <div className="max-w-[220px] truncate" title={matter.display_number}>
+            {matter.display_number}
+          </div>
+        </TableCell>
         <TableCell className="text-sm">
-          {matter.mapped_category ?? matter.case_type ?? "-"}
+          <div className="max-w-[180px] truncate" title={clientDisplay}>
+            {clientDisplay}
+          </div>
+        </TableCell>
+        <TableCell className="text-sm">
+          <div className="max-w-[140px] truncate" title={matter.mapped_category ?? matter.case_type ?? undefined}>
+            {matter.mapped_category ?? matter.case_type ?? "-"}
+          </div>
         </TableCell>
         <TableCell className="text-right text-sm">{matter.activeMonths}</TableCell>
         <TableCell className="text-right text-sm">
@@ -734,13 +744,22 @@ function DeltaRow({
                   <Loader2 className="size-4 animate-spin" /> Loading activities...
                 </div>
               ) : activities && activities.length > 0 ? (
-                <table className="w-full text-xs">
+                <table className="w-full text-xs table-fixed">
+                  <colgroup>
+                    <col className="w-[90px]" />
+                    <col className="w-[70px]" />
+                    <col className="w-[130px]" />
+                    <col />
+                    <col className="w-[60px]" />
+                    <col className="w-[70px]" />
+                    <col className="w-[90px]" />
+                  </colgroup>
                   <thead>
                     <tr className="text-muted-foreground border-b">
                       <th className="text-left py-1.5 font-medium">Date</th>
                       <th className="text-left py-1.5 font-medium">Type</th>
                       <th className="text-left py-1.5 font-medium">User</th>
-                      <th className="text-left py-1.5 font-medium max-w-xs">Description</th>
+                      <th className="text-left py-1.5 font-medium">Description</th>
                       <th className="text-right py-1.5 font-medium">Hours</th>
                       <th className="text-right py-1.5 font-medium">Rate</th>
                       <th className="text-right py-1.5 font-medium">Billable</th>
@@ -749,7 +768,7 @@ function DeltaRow({
                   <tbody>
                     {activities.map((a, i) => (
                       <tr key={i} className="border-b border-slate-100">
-                        <td className="py-1.5 text-muted-foreground">
+                        <td className="py-1.5 text-muted-foreground truncate">
                           {a.activity_date ?? "-"}
                         </td>
                         <td className="py-1.5">
@@ -757,8 +776,12 @@ function DeltaRow({
                             {a.type === "TimeEntry" ? "Time" : "Expense"}
                           </Badge>
                         </td>
-                        <td className="py-1.5">{a.user_name ?? "-"}</td>
-                        <td className="py-1.5 max-w-xs truncate">{a.description ?? "-"}</td>
+                        <td className="py-1.5 truncate" title={a.user_name ?? undefined}>
+                          {a.user_name ?? "-"}
+                        </td>
+                        <td className="py-1.5 truncate" title={a.description ?? undefined}>
+                          {a.description ?? "-"}
+                        </td>
                         <td className="py-1.5 text-right">{a.hours || "-"}</td>
                         <td className="py-1.5 text-right">{a.rate ? `$${a.rate}` : "-"}</td>
                         <td className="py-1.5 text-right font-medium">
