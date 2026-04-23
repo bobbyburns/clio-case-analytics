@@ -6,8 +6,10 @@ export interface ParsedClients {
 }
 
 /** Patterns (lowercased substrings) that identify non-client placeholder entries
- *  — administrative bookkeeping that shouldn't appear in any client/revenue analysis. */
-const EXCLUDED_CLIENT_PATTERNS = ["non-billable that counts"]
+ *  — administrative bookkeeping that shouldn't appear in any client/revenue analysis.
+ *  "non-billable that" catches both existing variants:
+ *  "Non-Billable That Counts!" and "Non-Billable That Does NOT Count". */
+const EXCLUDED_CLIENT_PATTERNS = ["non-billable that"]
 
 export function isExcludedClient(raw: string | null | undefined): boolean {
   if (!raw) return false
