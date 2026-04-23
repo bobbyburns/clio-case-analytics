@@ -15,7 +15,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { TrendingUp, TrendingDown, Minus, X } from "lucide-react"
+import { TrendingUp, TrendingDown, Minus, X, ChevronRight, ChevronDown, Loader2 } from "lucide-react"
 import { KPICard } from "@/components/charts/KPICard"
 import { BreakEvenExplainer } from "@/components/BreakEvenExplainer"
 import {
@@ -25,7 +25,8 @@ import {
 import { formatCurrency } from "@/lib/utils/format"
 import { mean, median } from "@/lib/utils/stats"
 import { densityHistogram, deltaHistogram } from "@/lib/utils/pricing"
-import type { ClientRow } from "@/app/(dashboard)/clients/page"
+import type { ClientRow, EngagementType, ClientMatter } from "@/app/(dashboard)/clients/page"
+import type { Activity } from "@/lib/types"
 
 type SortKey =
   | "display"
@@ -69,6 +70,41 @@ export function ClientsInteractive({
   const [sortKey, setSortKey] = useState<SortKey>("totalBillable")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc")
   const [limit, setLimit] = useState(100)
+  const [expandedKey, setExpandedKey] = useState<string | null>(null)
+  const [activitiesByKey, setActivitiesByKey] = useState<Record<string, Activity[]>>({})
+  const [loadingKey, setLoadingKey] = useState<string | null>(null)
+
+  const toggleExpand = useCallback(
+    async (clientKey: string, matters: ClientMatter[]) => {
+      if (expandedKey === clientKey) {
+        setExpandedKey(null)
+        return
+      }
+      setExpandedKey(clientKey)
+      if (!activitiesByKey[clientKey]) {
+        setLoadingKey(clientKey)
+        try {
+          const results = await Promise.all(
+            matters.map((m) =>
+              fetch(`/api/activities?matterId=${encodeURIComponent(m.unique_id)}`)
+                .then((r) => r.json())
+                .then((data) => (data.activities as Activity[]) ?? [])
+                .catch(() => [] as Activity[]),
+            ),
+          )
+          const merged = results.flat()
+          merged.sort((a, b) =>
+            (a.activity_date || "").localeCompare(b.activity_date || ""),
+          )
+          setActivitiesByKey((prev) => ({ ...prev, [clientKey]: merged }))
+        } catch {
+          setActivitiesByKey((prev) => ({ ...prev, [clientKey]: [] }))
+        }
+        setLoadingKey(null)
+      }
+    },
+    [expandedKey, activitiesByKey],
+  )
 
   const syncRetainerToUrl = useCallback(
     (value: number) => {
@@ -538,12 +574,14 @@ export function ClientsInteractive({
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-8" />
                 <TableHead
                   className="cursor-pointer select-none"
                   onClick={() => toggleSort("display")}
                 >
                   Client{indicator("display")}
                 </TableHead>
+                <TableHead>Type</TableHead>
                 <TableHead
                   className="text-right cursor-pointer select-none"
                   onClick={() => toggleSort("matterCount")}
@@ -580,11 +618,18 @@ export function ClientsInteractive({
             </TableHeader>
             <TableBody>
               {visible.map((r) => (
-                <ScenarioClientRow key={r.clientKey} row={r} />
+                <ScenarioClientRow
+                  key={r.clientKey}
+                  row={r}
+                  isExpanded={expandedKey === r.clientKey}
+                  isLoading={loadingKey === r.clientKey}
+                  activities={activitiesByKey[r.clientKey]}
+                  onToggleExpand={() => toggleExpand(r.clientKey, r.matters)}
+                />
               ))}
               {visible.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
+                  <TableCell colSpan={10} className="text-center py-8 text-muted-foreground">
                     No clients match this filter
                   </TableCell>
                 </TableRow>
@@ -604,45 +649,275 @@ export function ClientsInteractive({
   )
 }
 
-function ScenarioClientRow({ row: r }: { row: ScenarioRow }) {
+const ENGAGEMENT_BADGE: Record<
+  EngagementType,
+  { label: string; className: string; title: string }
+> = {
+  ongoing: {
+    label: "Ongoing",
+    className: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    title: "Activity span ≥ 30 days — typical client engagement.",
+  },
+  "short-burst": {
+    label: "Short burst",
+    className: "bg-amber-50 text-amber-700 border-amber-200",
+    title:
+      "2–29 day span (OPs, DV filings, quick hearings). Real work but compressed — inflates $/month density.",
+  },
+  "single-activity": {
+    label: "Single activity",
+    className: "bg-slate-100 text-slate-700 border-slate-200",
+    title:
+      "Only one activity on record. Often a consultation, filing fee, or legacy entry.",
+  },
+  "flat-fee": {
+    label: "Flat fee",
+    className: "bg-blue-50 text-blue-700 border-blue-200",
+    title:
+      "≥70% of revenue came from flat-rate activities (Pre-Nups, uncontested divorces, consultations).",
+  },
+  "legacy-migration": {
+    label: "Legacy import",
+    className: "bg-rose-50 text-rose-700 border-rose-200",
+    title:
+      "Balance-forward activity from the 2016 Xero → Clio migration. Not real work — consider excluding from retainer analysis.",
+  },
+}
+
+function ScenarioClientRow({
+  row: r,
+  isExpanded,
+  isLoading,
+  activities,
+  onToggleExpand,
+}: {
+  row: ScenarioRow
+  isExpanded: boolean
+  isLoading: boolean
+  activities: Activity[] | undefined
+  onToggleExpand: () => void
+}) {
   const isLoser = r.delta < 0
   const DeltaIcon = r.delta > 0 ? TrendingUp : r.delta < 0 ? TrendingDown : Minus
   const deltaColor =
     r.delta > 0 ? "text-emerald-600" : r.delta < 0 ? "text-rose-600" : "text-muted-foreground"
+  const badge = ENGAGEMENT_BADGE[r.engagementType]
+
+  const mattersById = useMemo(() => {
+    const map = new Map<string, ClientMatter>()
+    for (const m of r.matters) map.set(m.unique_id, m)
+    return map
+  }, [r.matters])
+
   return (
-    <TableRow className={isLoser ? "bg-rose-50/40" : ""}>
-      <TableCell className="text-sm font-medium">
-        <div className="max-w-[260px] truncate" title={r.display}>
-          {r.display}
-        </div>
-        {r.isJoint && (
-          <Badge variant="outline" className="mt-1 text-[10px]">
-            Joint
-          </Badge>
-        )}
-      </TableCell>
-      <TableCell className="text-right text-sm">{r.matterCount}</TableCell>
-      <TableCell className="text-right text-sm">
-        {r.monthsActive > 0 ? r.monthsActive.toFixed(1) : "—"}
-      </TableCell>
-      <TableCell className="text-right text-sm font-semibold">
-        {formatCurrency(r.totalBillable)}
-      </TableCell>
-      <TableCell className="text-right text-sm">
-        {r.avgPerMonth > 0 ? formatCurrency(r.avgPerMonth) : "—"}
-      </TableCell>
-      <TableCell className={`text-right text-sm font-semibold ${deltaColor}`}>
-        <span className="inline-flex items-center gap-1 justify-end">
-          <DeltaIcon className="size-3.5" />
-          {formatCurrency(r.delta)}
-        </span>
-      </TableCell>
-      <TableCell className="text-xs text-muted-foreground">
-        {r.firstActivityDate ?? "—"}
-      </TableCell>
-      <TableCell className="text-xs text-muted-foreground">
-        {r.lastActivityDate ?? "—"}
-      </TableCell>
-    </TableRow>
+    <>
+      <TableRow
+        className={`cursor-pointer ${isLoser ? "bg-rose-50/40" : ""}`}
+        onClick={onToggleExpand}
+      >
+        <TableCell className="pl-3">
+          {isExpanded ? (
+            <ChevronDown className="size-4 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="size-4 text-muted-foreground" />
+          )}
+        </TableCell>
+        <TableCell className="text-sm font-medium">
+          <div className="max-w-[240px] truncate" title={r.display}>
+            {r.display}
+          </div>
+          {r.isJoint && (
+            <Badge variant="outline" className="mt-1 text-[10px]">
+              Joint
+            </Badge>
+          )}
+        </TableCell>
+        <TableCell>
+          <span
+            className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${badge.className}`}
+            title={badge.title}
+          >
+            {badge.label}
+          </span>
+        </TableCell>
+        <TableCell className="text-right text-sm">{r.matterCount}</TableCell>
+        <TableCell className="text-right text-sm">
+          {r.monthsActive > 0 ? r.monthsActive.toFixed(1) : "—"}
+        </TableCell>
+        <TableCell className="text-right text-sm font-semibold">
+          {formatCurrency(r.totalBillable)}
+        </TableCell>
+        <TableCell className="text-right text-sm">
+          {r.avgPerMonth > 0 ? formatCurrency(r.avgPerMonth) : "—"}
+        </TableCell>
+        <TableCell className={`text-right text-sm font-semibold ${deltaColor}`}>
+          <span className="inline-flex items-center gap-1 justify-end">
+            <DeltaIcon className="size-3.5" />
+            {formatCurrency(r.delta)}
+          </span>
+        </TableCell>
+        <TableCell className="text-xs text-muted-foreground">
+          {r.firstActivityDate ?? "—"}
+        </TableCell>
+        <TableCell className="text-xs text-muted-foreground">
+          {r.lastActivityDate ?? "—"}
+        </TableCell>
+      </TableRow>
+      {isExpanded && (
+        <TableRow>
+          <TableCell colSpan={10} className="bg-slate-50 p-0">
+            <div className="px-6 py-4 space-y-4">
+              {/* Matter summary */}
+              <div>
+                <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                  Matters ({r.matters.length})
+                </div>
+                <table className="w-full text-xs table-fixed">
+                  <colgroup>
+                    <col />
+                    <col className="w-[140px]" />
+                    <col className="w-[100px]" />
+                    <col className="w-[90px]" />
+                    <col className="w-[110px]" />
+                    <col className="w-[110px]" />
+                    <col className="w-[120px]" />
+                  </colgroup>
+                  <thead>
+                    <tr className="text-muted-foreground border-b">
+                      <th className="text-left py-1.5 font-medium">Matter</th>
+                      <th className="text-left py-1.5 font-medium">Case Type</th>
+                      <th className="text-right py-1.5 font-medium">Billable</th>
+                      <th className="text-right py-1.5 font-medium">Activities</th>
+                      <th className="text-left py-1.5 font-medium">First act.</th>
+                      <th className="text-left py-1.5 font-medium">Last act.</th>
+                      <th className="text-left py-1.5 font-medium">Flags</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {r.matters.map((m) => (
+                      <tr key={m.unique_id} className="border-b border-slate-100">
+                        <td className="py-1.5 truncate" title={m.display_number}>
+                          {m.display_number}
+                        </td>
+                        <td className="py-1.5 truncate">
+                          {m.mapped_category ?? m.case_type ?? "—"}
+                        </td>
+                        <td className="py-1.5 text-right font-medium">
+                          {formatCurrency(m.total_billable)}
+                        </td>
+                        <td className="py-1.5 text-right">
+                          {m.activity_count ?? "—"}
+                        </td>
+                        <td className="py-1.5">{m.firstActivityDate ?? "—"}</td>
+                        <td className="py-1.5">{m.lastActivityDate ?? "—"}</td>
+                        <td className="py-1.5">
+                          {m.hasLegacyMigration && (
+                            <Badge
+                              variant="outline"
+                              className="mr-1 text-[10px] bg-rose-50 text-rose-700 border-rose-200"
+                            >
+                              Xero
+                            </Badge>
+                          )}
+                          {m.hasFlatRateActivity && (
+                            <Badge
+                              variant="outline"
+                              className="mr-1 text-[10px] bg-blue-50 text-blue-700 border-blue-200"
+                            >
+                              Flat
+                            </Badge>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Activities timeline */}
+              <div>
+                <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                  Activities {activities ? `(${activities.length})` : ""}
+                </div>
+                {isLoading ? (
+                  <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+                    <Loader2 className="size-4 animate-spin" /> Loading activities...
+                  </div>
+                ) : activities && activities.length > 0 ? (
+                  <div className="max-h-96 overflow-y-auto">
+                    <table className="w-full text-xs table-fixed">
+                      <colgroup>
+                        <col className="w-[90px]" />
+                        <col className="w-[180px]" />
+                        <col className="w-[70px]" />
+                        <col className="w-[120px]" />
+                        <col />
+                        <col className="w-[60px]" />
+                        <col className="w-[70px]" />
+                        <col className="w-[90px]" />
+                      </colgroup>
+                      <thead>
+                        <tr className="text-muted-foreground border-b sticky top-0 bg-slate-50">
+                          <th className="text-left py-1.5 font-medium">Date</th>
+                          <th className="text-left py-1.5 font-medium">Matter</th>
+                          <th className="text-left py-1.5 font-medium">Type</th>
+                          <th className="text-left py-1.5 font-medium">User</th>
+                          <th className="text-left py-1.5 font-medium">Description</th>
+                          <th className="text-right py-1.5 font-medium">Hours</th>
+                          <th className="text-right py-1.5 font-medium">Rate</th>
+                          <th className="text-right py-1.5 font-medium">Billable</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {activities.map((a, i) => {
+                          const matter = a.matter_unique_id
+                            ? mattersById.get(String(a.matter_unique_id))
+                            : undefined
+                          return (
+                            <tr key={i} className="border-b border-slate-100">
+                              <td className="py-1.5 text-muted-foreground truncate">
+                                {a.activity_date ?? "—"}
+                              </td>
+                              <td
+                                className="py-1.5 truncate"
+                                title={matter?.display_number ?? ""}
+                              >
+                                {matter?.display_number ?? "—"}
+                              </td>
+                              <td className="py-1.5">
+                                <Badge variant="outline" className="text-[10px]">
+                                  {a.type === "TimeEntry" ? "Time" : "Expense"}
+                                </Badge>
+                              </td>
+                              <td className="py-1.5 truncate" title={a.user_name ?? ""}>
+                                {a.user_name ?? "—"}
+                              </td>
+                              <td className="py-1.5 truncate" title={a.description ?? ""}>
+                                {a.description ?? "—"}
+                              </td>
+                              <td className="py-1.5 text-right">{a.hours || "—"}</td>
+                              <td className="py-1.5 text-right">
+                                {a.rate ? `$${a.rate}` : "—"}
+                              </td>
+                              <td className="py-1.5 text-right font-medium">
+                                {a.billable_amount
+                                  ? formatCurrency(a.billable_amount)
+                                  : "—"}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground py-4">No activities found</p>
+                )}
+              </div>
+            </div>
+          </TableCell>
+        </TableRow>
+      )}
+    </>
   )
 }

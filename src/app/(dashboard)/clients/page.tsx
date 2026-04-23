@@ -12,6 +12,28 @@ export const revalidate = 300
 const DAYS_PER_MONTH = 30.44
 const DEFAULT_RETAINER = 1500
 
+export type EngagementType =
+  | "ongoing" // span ≥ 30 days
+  | "short-burst" // 2–29 days, ≥2 activities
+  | "single-activity" // activity_count == 1 but not legacy
+  | "flat-fee" // majority of billable revenue comes from flat_rate activities
+  | "legacy-migration" // Xero balance-forward activities from 2016-11-06
+
+export interface ClientMatter {
+  unique_id: string
+  display_number: string
+  mapped_category: string | null
+  case_type: string | null
+  total_billable: number
+  activity_count: number | null
+  open_date: string | null
+  close_date: string | null
+  firstActivityDate: string | null
+  lastActivityDate: string | null
+  hasFlatRateActivity: boolean
+  hasLegacyMigration: boolean
+}
+
 export interface ClientRow {
   clientKey: string
   display: string
@@ -22,6 +44,8 @@ export interface ClientRow {
   matterCount: number
   firstActivityDate: string | null
   lastActivityDate: string | null
+  engagementType: EngagementType
+  matters: ClientMatter[]
 }
 
 export default async function ClientsPage({
@@ -65,18 +89,35 @@ export default async function ClientsPage({
     )
   }
 
-  // Group activity dates per matter (to find per-matter first/last, then union into client window)
-  const activityDatesByMatter = new Map<string, string[]>()
+  // Per-matter activity metadata: dates + flat-rate share + legacy-migration detection
+  interface MatterActStats {
+    dates: string[]
+    totalBillable: number
+    flatRateBillable: number
+    legacyBillable: number // Xero 2016-11-06 balance-forwards
+  }
+  const actStatsByMatter = new Map<string, MatterActStats>()
   for (const a of activities) {
-    if (!a.activity_date) continue
-    const key = String(a.matter_unique_id ?? "")
-    if (!key) continue
-    const arr = activityDatesByMatter.get(key)
-    if (arr) arr.push(a.activity_date)
-    else activityDatesByMatter.set(key, [a.activity_date])
+    if (!a.matter_unique_id) continue
+    const key = String(a.matter_unique_id)
+    let s = actStatsByMatter.get(key)
+    if (!s) {
+      s = { dates: [], totalBillable: 0, flatRateBillable: 0, legacyBillable: 0 }
+      actStatsByMatter.set(key, s)
+    }
+    if (a.activity_date) s.dates.push(a.activity_date)
+    const amt = a.billable_amount ?? 0
+    s.totalBillable += amt
+    if (a.flat_rate) s.flatRateBillable += amt
+    if (
+      a.activity_date === "2016-11-06" &&
+      (a.description || "").toLowerCase().includes("xero")
+    ) {
+      s.legacyBillable += amt
+    }
   }
 
-  // Aggregate per client: total billable, matter count, collected activity dates
+  // Aggregate per client, keeping the per-matter structure so the UI can drill in.
   const byClient = new Map<
     string,
     {
@@ -85,26 +126,54 @@ export default async function ClientsPage({
       totalBillable: number
       matterCount: number
       allActivityDates: string[]
+      flatRateBillable: number
+      legacyBillable: number
+      matters: ClientMatter[]
     }
   >()
 
   for (const m of matters) {
     const parsed = parseClientsField(m.clients)
     const billable = m.total_billable ?? 0
-    const actDates = activityDatesByMatter.get(m.unique_id) ?? []
+    const stats = actStatsByMatter.get(m.unique_id)
+    const dates = stats?.dates ?? []
+    const sortedDates = [...dates].sort()
+    const firstDate = sortedDates[0] ?? null
+    const lastDate = sortedDates[sortedDates.length - 1] ?? null
+
+    const clientMatter: ClientMatter = {
+      unique_id: m.unique_id,
+      display_number: m.display_number,
+      mapped_category: m.mapped_category,
+      case_type: m.case_type,
+      total_billable: billable,
+      activity_count: m.activity_count,
+      open_date: m.open_date,
+      close_date: m.close_date,
+      firstActivityDate: firstDate,
+      lastActivityDate: lastDate,
+      hasFlatRateActivity: (stats?.flatRateBillable ?? 0) > 0,
+      hasLegacyMigration: (stats?.legacyBillable ?? 0) > 0,
+    }
 
     const existing = byClient.get(parsed.key)
     if (existing) {
       existing.totalBillable += billable
       existing.matterCount += 1
-      existing.allActivityDates.push(...actDates)
+      existing.allActivityDates.push(...dates)
+      existing.flatRateBillable += stats?.flatRateBillable ?? 0
+      existing.legacyBillable += stats?.legacyBillable ?? 0
+      existing.matters.push(clientMatter)
     } else {
       byClient.set(parsed.key, {
         display: parsed.display,
         isJoint: parsed.isJoint,
         totalBillable: billable,
         matterCount: 1,
-        allActivityDates: [...actDates],
+        allActivityDates: [...dates],
+        flatRateBillable: stats?.flatRateBillable ?? 0,
+        legacyBillable: stats?.legacyBillable ?? 0,
+        matters: [clientMatter],
       })
     }
   }
@@ -114,14 +183,38 @@ export default async function ClientsPage({
     let firstDate: string | null = null
     let lastDate: string | null = null
     let monthsActive = 0
+    let spanDays = 0
     if (v.allActivityDates.length > 0) {
       const sorted = [...v.allActivityDates].sort()
       firstDate = sorted[0]
       lastDate = sorted[sorted.length - 1]
-      const spanDays =
+      spanDays =
         (new Date(lastDate).getTime() - new Date(firstDate).getTime()) / (1000 * 60 * 60 * 24)
       monthsActive = Math.max(0, spanDays / DAYS_PER_MONTH)
     }
+
+    // Engagement classification:
+    // - legacy-migration: majority of revenue is from Xero 2016-11-06 balance-forwards
+    // - flat-fee: ≥70% of revenue is from flat_rate activities
+    // - single-activity: only 1 activity
+    // - short-burst: span 2–29 days with multiple activities (OP/DV/quick-turn)
+    // - ongoing: everything else (span ≥ 30 days OR fallback)
+    let engagementType: EngagementType
+    const hasRevenue = v.totalBillable > 0
+    const legacyShare = hasRevenue ? v.legacyBillable / v.totalBillable : 0
+    const flatShare = hasRevenue ? v.flatRateBillable / v.totalBillable : 0
+    if (legacyShare >= 0.5) {
+      engagementType = "legacy-migration"
+    } else if (flatShare >= 0.7) {
+      engagementType = "flat-fee"
+    } else if (v.allActivityDates.length <= 1) {
+      engagementType = "single-activity"
+    } else if (spanDays < 30) {
+      engagementType = "short-burst"
+    } else {
+      engagementType = "ongoing"
+    }
+
     rows.push({
       clientKey,
       display: v.display,
@@ -132,6 +225,8 @@ export default async function ClientsPage({
       matterCount: v.matterCount,
       firstActivityDate: firstDate,
       lastActivityDate: lastDate,
+      engagementType,
+      matters: v.matters,
     })
   }
 
