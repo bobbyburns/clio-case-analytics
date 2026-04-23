@@ -35,7 +35,25 @@ type SortKey =
   | "avgPerMonth"
   | "matterCount"
   | "delta"
+  | "engagementType"
 type ScenarioFilter = "all" | "winners" | "losers"
+
+/** Logical (not alphabetical) sort order for the Type column. */
+const ENGAGEMENT_SORT_ORDER: Record<EngagementType, number> = {
+  ongoing: 0,
+  "short-burst": 1,
+  "single-activity": 2,
+  "flat-fee": 3,
+  "legacy-migration": 4,
+}
+
+const ENGAGEMENT_TYPES: EngagementType[] = [
+  "ongoing",
+  "short-burst",
+  "single-activity",
+  "flat-fee",
+  "legacy-migration",
+]
 
 interface ScenarioRow extends ClientRow {
   activeMonthsCeil: number
@@ -66,6 +84,7 @@ export function ClientsInteractive({
   const [firstFrom, setFirstFrom] = useState(initialFirstFrom)
   const [firstTo, setFirstTo] = useState(initialFirstTo)
   const [scenarioFilter, setScenarioFilter] = useState<ScenarioFilter>("all")
+  const [typeFilter, setTypeFilter] = useState<Set<EngagementType>>(new Set())
   const [search, setSearch] = useState("")
   const [sortKey, setSortKey] = useState<SortKey>("totalBillable")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc")
@@ -218,6 +237,27 @@ export function ClientsInteractive({
     }
   }, [scenarioRows])
 
+  const typeCounts = useMemo(() => {
+    const counts: Record<EngagementType, number> = {
+      ongoing: 0,
+      "short-burst": 0,
+      "single-activity": 0,
+      "flat-fee": 0,
+      "legacy-migration": 0,
+    }
+    for (const r of scenarioRows) counts[r.engagementType]++
+    return counts
+  }, [scenarioRows])
+
+  const toggleTypeFilter = useCallback((t: EngagementType) => {
+    setTypeFilter((prev) => {
+      const next = new Set(prev)
+      if (next.has(t)) next.delete(t)
+      else next.add(t)
+      return next
+    })
+  }, [])
+
   const densityBuckets = useMemo(
     () => densityHistogram(summary.densities),
     [summary.densities],
@@ -233,9 +273,15 @@ export function ClientsInteractive({
     if (q) list = list.filter((r) => r.display.toLowerCase().includes(q))
     if (scenarioFilter === "winners") list = list.filter((r) => r.delta > 0)
     else if (scenarioFilter === "losers") list = list.filter((r) => r.delta < 0)
+    if (typeFilter.size > 0) list = list.filter((r) => typeFilter.has(r.engagementType))
 
     list = [...list]
     list.sort((a, b) => {
+      if (sortKey === "engagementType") {
+        const ao = ENGAGEMENT_SORT_ORDER[a.engagementType]
+        const bo = ENGAGEMENT_SORT_ORDER[b.engagementType]
+        return sortDir === "desc" ? bo - ao : ao - bo
+      }
       const av = a[sortKey]
       const bv = b[sortKey]
       if (typeof av === "string" && typeof bv === "string") {
@@ -244,7 +290,7 @@ export function ClientsInteractive({
       return sortDir === "desc" ? (bv as number) - (av as number) : (av as number) - (bv as number)
     })
     return list
-  }, [scenarioRows, search, scenarioFilter, sortKey, sortDir])
+  }, [scenarioRows, search, scenarioFilter, typeFilter, sortKey, sortDir])
 
   const visible = filtered.slice(0, limit)
 
@@ -569,6 +615,47 @@ export function ClientsInteractive({
               />
             </div>
           </div>
+          {/* Engagement-type filter pills */}
+          <div className="flex items-center gap-2 flex-wrap mt-3 pt-3 border-t">
+            <span className="text-xs text-muted-foreground mr-1">Type:</span>
+            {ENGAGEMENT_TYPES.map((t) => {
+              const badge = ENGAGEMENT_BADGE[t]
+              const active = typeFilter.has(t)
+              const count = typeCounts[t]
+              return (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => toggleTypeFilter(t)}
+                  title={badge.title}
+                  className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium transition ${badge.className} ${
+                    active
+                      ? "ring-2 ring-offset-1 ring-foreground/30"
+                      : typeFilter.size > 0
+                        ? "opacity-50 hover:opacity-100"
+                        : "hover:opacity-90"
+                  }`}
+                >
+                  {badge.label}
+                  <span className="ml-1.5 text-[10px] opacity-70">{count.toLocaleString()}</span>
+                </button>
+              )
+            })}
+            {typeFilter.size > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setTypeFilter(new Set())}
+                className="h-7 text-xs"
+              >
+                <X className="size-3 mr-1" />
+                Clear type filter
+              </Button>
+            )}
+            <span className="text-[10px] text-muted-foreground ml-auto">
+              Click to include. Selecting nothing shows all.
+            </span>
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           <Table>
@@ -581,7 +668,12 @@ export function ClientsInteractive({
                 >
                   Client{indicator("display")}
                 </TableHead>
-                <TableHead>Type</TableHead>
+                <TableHead
+                  className="cursor-pointer select-none"
+                  onClick={() => toggleSort("engagementType")}
+                >
+                  Type{indicator("engagementType")}
+                </TableHead>
                 <TableHead
                   className="text-right cursor-pointer select-none"
                   onClick={() => toggleSort("matterCount")}
