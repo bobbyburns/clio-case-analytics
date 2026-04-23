@@ -14,6 +14,7 @@ import {
   LogOut,
   Tags,
   Calculator,
+  UserSquare,
 } from "lucide-react"
 import { createClient } from "@/lib/supabase/client"
 import { useRouter } from "next/navigation"
@@ -26,6 +27,7 @@ const navItems = [
   { href: "/trends", label: "Trends", icon: LineChart },
   { href: "/activity-patterns", label: "Activity Patterns", icon: Activity },
   { href: "/attorneys", label: "Attorneys", icon: Users },
+  { href: "/clients", label: "Clients", icon: UserSquare },
   { href: "/pricing-model", label: "Pricing Model", icon: Calculator },
   { href: "/case-types", label: "Case Type Mapping", icon: Tags },
 ]

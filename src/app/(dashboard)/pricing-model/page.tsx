@@ -1,6 +1,5 @@
-import type { SupabaseClient } from "@supabase/supabase-js"
 import { createClient } from "@/lib/supabase/server"
-import { parseFilters, fetchMatters } from "@/lib/queries"
+import { parseFilters, fetchMatters, fetchActivitiesForMatters } from "@/lib/queries"
 import { PricingModelInteractive } from "@/components/PricingModelInteractive"
 import { AIChatAssistant } from "@/components/AIChatAssistant"
 import {
@@ -41,11 +40,10 @@ export default async function PricingModelPage({
     matters = await fetchMatters(supabase, filters)
     console.log(`[pricing-model] fetched ${matters.length} matters in ${Date.now() - t0}ms`)
     const t1 = Date.now()
-    activities = await fetchPricingActivities(
+    activities = await fetchActivitiesForMatters(
       supabase,
       matters.map((m) => m.unique_id),
-      filters.dateFrom,
-      filters.dateTo,
+      { dateFrom: filters.dateFrom, dateTo: filters.dateTo },
     )
     console.log(
       `[pricing-model] fetched ${activities.length} activities in ${Date.now() - t1}ms`,
@@ -161,55 +159,6 @@ Top 5 clients by avg monthly value: ${clientLeaderboard
       <AIChatAssistant pageContext={pageContext} />
     </div>
   )
-}
-
-/** Fetch only the activity columns this page needs, scoped to the supplied matter IDs.
- *  Chunks the IN() clause to stay under PostgREST URL limits. Chunks run in parallel
- *  (bounded concurrency) so total latency is ~one chunk's worth, not N chunks'. */
-async function fetchPricingActivities(
-  supabase: SupabaseClient,
-  matterIds: string[],
-  dateFrom: string | null,
-  dateTo: string | null,
-): Promise<Activity[]> {
-  if (matterIds.length === 0) return []
-  const COLS =
-    "matter_unique_id,activity_date,billable_amount,flat_rate,hours,rate,type,user_name,description,bill_state,nonbillable_amount"
-  const ID_CHUNK = 100
-  const PAGE = 1000
-  const CONCURRENCY = 8
-
-  const chunks: string[][] = []
-  for (let i = 0; i < matterIds.length; i += ID_CHUNK) {
-    chunks.push(matterIds.slice(i, i + ID_CHUNK))
-  }
-
-  async function fetchChunk(idChunk: string[]): Promise<Activity[]> {
-    const out: Activity[] = []
-    let offset = 0
-    while (true) {
-      let q = supabase.from("clio_activities").select(COLS).in("matter_unique_id", idChunk)
-      if (dateFrom) q = q.gte("activity_date", dateFrom)
-      if (dateTo) q = q.lte("activity_date", dateTo)
-      const { data, error } = await q
-        .order("activity_date", { ascending: true })
-        .range(offset, offset + PAGE - 1)
-      if (error) throw error
-      if (!data || data.length === 0) break
-      out.push(...(data as unknown as Activity[]))
-      if (data.length < PAGE) break
-      offset += PAGE
-    }
-    return out
-  }
-
-  const all: Activity[] = []
-  for (let i = 0; i < chunks.length; i += CONCURRENCY) {
-    const batch = chunks.slice(i, i + CONCURRENCY)
-    const results = await Promise.all(batch.map(fetchChunk))
-    for (const arr of results) all.push(...arr)
-  }
-  return all
 }
 
 function excludeTopByBillable(matters: ScenarioMatter[], pct: number): ScenarioMatter[] {

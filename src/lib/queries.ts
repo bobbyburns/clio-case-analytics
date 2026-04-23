@@ -100,6 +100,62 @@ export async function fetchActivities(
   return all
 }
 
+/** Fetch only the activity columns a caller needs, scoped to the supplied matter IDs.
+ *  Chunks the IN() clause and runs chunks in parallel with bounded concurrency
+ *  (8 by default), so total latency is ~one chunk's worth regardless of N. */
+export async function fetchActivitiesForMatters(
+  supabase: SupabaseClient,
+  matterIds: string[],
+  options: {
+    dateFrom?: string | null
+    dateTo?: string | null
+    columns?: string
+    concurrency?: number
+  } = {},
+): Promise<Activity[]> {
+  if (matterIds.length === 0) return []
+  const {
+    dateFrom = null,
+    dateTo = null,
+    columns = "matter_unique_id,activity_date,billable_amount,flat_rate,hours,rate,type,user_name,description,bill_state,nonbillable_amount",
+    concurrency = 8,
+  } = options
+
+  const ID_CHUNK = 100
+  const PAGE = 1000
+  const chunks: string[][] = []
+  for (let i = 0; i < matterIds.length; i += ID_CHUNK) {
+    chunks.push(matterIds.slice(i, i + ID_CHUNK))
+  }
+
+  async function fetchChunk(idChunk: string[]): Promise<Activity[]> {
+    const out: Activity[] = []
+    let offset = 0
+    while (true) {
+      let q = supabase.from("clio_activities").select(columns).in("matter_unique_id", idChunk)
+      if (dateFrom) q = q.gte("activity_date", dateFrom)
+      if (dateTo) q = q.lte("activity_date", dateTo)
+      const { data, error } = await q
+        .order("activity_date", { ascending: true })
+        .range(offset, offset + PAGE - 1)
+      if (error) throw error
+      if (!data || data.length === 0) break
+      out.push(...(data as unknown as Activity[]))
+      if (data.length < PAGE) break
+      offset += PAGE
+    }
+    return out
+  }
+
+  const all: Activity[] = []
+  for (let i = 0; i < chunks.length; i += concurrency) {
+    const batch = chunks.slice(i, i + concurrency)
+    const results = await Promise.all(batch.map(fetchChunk))
+    for (const arr of results) all.push(...arr)
+  }
+  return all
+}
+
 export async function fetchFilterOptions(supabase: SupabaseClient) {
   const allMatters: Array<{ status: string; case_type: string; county: string; responsible_attorney: string; mapped_category: string | null }> = []
   const PAGE = 1000
