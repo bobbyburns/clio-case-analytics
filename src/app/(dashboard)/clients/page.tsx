@@ -4,7 +4,6 @@ import { ClientsInteractive } from "@/components/ClientsInteractive"
 import { AIChatAssistant } from "@/components/AIChatAssistant"
 import { parseClientsField } from "@/lib/utils/clients"
 import { formatCurrency } from "@/lib/utils/format"
-import { KPICard } from "@/components/charts/KPICard"
 import type { Activity } from "@/lib/types"
 
 export const maxDuration = 60
@@ -39,6 +38,8 @@ export default async function ClientsPage({
     Number.isFinite(retainerParam) && retainerParam > 0
       ? Math.min(10000, retainerParam)
       : DEFAULT_RETAINER
+  const firstFrom = typeof params.firstFrom === "string" ? params.firstFrom : ""
+  const firstTo = typeof params.firstTo === "string" ? params.firstTo : ""
 
   let matters: Awaited<ReturnType<typeof fetchMatters>>
   let activities: Activity[]
@@ -215,15 +216,12 @@ Top 5 clients by revenue: ${rows
         </p>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
-        <KPICard label="Clients" value={clientCount.toLocaleString()} trend={`${totalMatters.toLocaleString()} matters`} />
-        <KPICard label="Total Revenue" value={formatCurrency(totalRevenue)} trend={`${formatCurrency(avgRevenuePerClient)} / client avg`} />
-        <KPICard label="Avg Months Active" value={avgMonthsActive.toFixed(1)} trend="mean per client" />
-        <KPICard label="Avg $ / Active Month" value={formatCurrency(avgPerMonthMean)} trend="mean of per-client ratios" />
-        <KPICard label="Weighted $ / Month" value={formatCurrency(weightedAvgPerMonth)} trend="total rev ÷ total months" />
-      </div>
-
-      <ClientsInteractive rows={rows} initialRetainer={retainer} />
+      <ClientsInteractive
+        rows={rows}
+        initialRetainer={retainer}
+        initialFirstFrom={firstFrom}
+        initialFirstTo={firstTo}
+      />
 
       <AIChatAssistant pageContext={pageContext} />
     </div>

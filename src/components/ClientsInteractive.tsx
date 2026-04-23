@@ -15,8 +15,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { TrendingUp, TrendingDown, Minus } from "lucide-react"
+import { TrendingUp, TrendingDown, Minus, X } from "lucide-react"
 import { KPICard } from "@/components/charts/KPICard"
+import { BreakEvenExplainer } from "@/components/BreakEvenExplainer"
 import {
   RevenueDensityHistogram,
   WinnersLosersHistogram,
@@ -45,15 +46,24 @@ interface ScenarioRow extends ClientRow {
 interface Props {
   rows: ClientRow[]
   initialRetainer: number
+  initialFirstFrom: string
+  initialFirstTo: string
 }
 
-export function ClientsInteractive({ rows, initialRetainer }: Props) {
+export function ClientsInteractive({
+  rows,
+  initialRetainer,
+  initialFirstFrom,
+  initialFirstTo,
+}: Props) {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
 
   const [retainer, setRetainer] = useState(initialRetainer)
   const [retainerInput, setRetainerInput] = useState(String(initialRetainer))
+  const [firstFrom, setFirstFrom] = useState(initialFirstFrom)
+  const [firstTo, setFirstTo] = useState(initialFirstTo)
   const [scenarioFilter, setScenarioFilter] = useState<ScenarioFilter>("all")
   const [search, setSearch] = useState("")
   const [sortKey, setSortKey] = useState<SortKey>("totalBillable")
@@ -70,8 +80,31 @@ export function ClientsInteractive({ rows, initialRetainer }: Props) {
     [router, pathname, searchParams],
   )
 
+  const syncCohortToUrl = useCallback(
+    (from: string, to: string) => {
+      const params = new URLSearchParams(searchParams.toString())
+      if (from) params.set("firstFrom", from)
+      else params.delete("firstFrom")
+      if (to) params.set("firstTo", to)
+      else params.delete("firstTo")
+      router.replace(`${pathname}?${params.toString()}`)
+    },
+    [router, pathname, searchParams],
+  )
+
+  // Cohort filter: narrow rows by each client's first_activity_date.
+  const cohortRows = useMemo(() => {
+    if (!firstFrom && !firstTo) return rows
+    return rows.filter((r) => {
+      if (!r.firstActivityDate) return !firstFrom && !firstTo
+      if (firstFrom && r.firstActivityDate < firstFrom) return false
+      if (firstTo && r.firstActivityDate > firstTo) return false
+      return true
+    })
+  }, [rows, firstFrom, firstTo])
+
   const scenarioRows = useMemo<ScenarioRow[]>(() => {
-    return rows.map((r) => {
+    return cohortRows.map((r) => {
       const activeMonthsCeil = Math.max(1, Math.ceil(r.monthsActive))
       const hypothetical = activeMonthsCeil * retainer
       const delta = hypothetical - r.totalBillable
@@ -83,7 +116,7 @@ export function ClientsInteractive({ rows, initialRetainer }: Props) {
         isWinner: delta > 0,
       }
     })
-  }, [rows, retainer])
+  }, [cohortRows, retainer])
 
   const summary = useMemo(() => {
     const totalActual = scenarioRows.reduce((s, r) => s + r.totalBillable, 0)
@@ -92,11 +125,13 @@ export function ClientsInteractive({ rows, initialRetainer }: Props) {
     const losers = scenarioRows.filter((r) => r.delta < 0)
     const revenueCaptured = winners.reduce((s, r) => s + r.delta, 0)
     const revenueAtRisk = losers.reduce((s, r) => s + -r.delta, 0)
-    const totalMonths = scenarioRows.reduce((s, r) => s + r.activeMonthsCeil, 0)
+    const totalMonthsCeil = scenarioRows.reduce((s, r) => s + r.activeMonthsCeil, 0)
+    const totalMonthsRaw = scenarioRows.reduce((s, r) => s + r.monthsActive, 0)
     const densities = scenarioRows
       .filter((r) => r.monthsActive > 0 && r.totalBillable > 0)
       .map((r) => r.totalBillable / r.monthsActive)
-    const firmBreakEven = totalMonths > 0 ? totalActual / totalMonths : 0
+    // Break-even uses the raw monthsActive so it's comparable to the per-client $/month values.
+    const firmBreakEven = totalMonthsRaw > 0 ? totalActual / totalMonthsRaw : 0
     const medianBreakEven = median(densities)
     const meanBreakEven = mean(densities)
 
@@ -106,6 +141,21 @@ export function ClientsInteractive({ rows, initialRetainer }: Props) {
       .slice(0, 10)
       .reduce((s, r) => s + -r.delta, 0)
     const top10LoserShare = revenueAtRisk > 0 ? top10LoserImpact / revenueAtRisk : 0
+
+    // Top-row summary KPIs (also dependent on cohort filter).
+    const clientCount = scenarioRows.length
+    const totalMatters = scenarioRows.reduce((s, r) => s + r.matterCount, 0)
+    const avgRevenuePerClient = clientCount > 0 ? totalActual / clientCount : 0
+    const activeRows = scenarioRows.filter((r) => r.monthsActive > 0)
+    const avgMonthsActive =
+      activeRows.length > 0
+        ? activeRows.reduce((s, r) => s + r.monthsActive, 0) / activeRows.length
+        : 0
+    const avgPerMonthMean =
+      activeRows.length > 0
+        ? activeRows.reduce((s, r) => s + r.avgPerMonth, 0) / activeRows.length
+        : 0
+    const weightedAvgPerMonth = totalMonthsRaw > 0 ? totalActual / totalMonthsRaw : 0
 
     return {
       totalActual,
@@ -121,6 +171,14 @@ export function ClientsInteractive({ rows, initialRetainer }: Props) {
       densities,
       top10LoserShare,
       top10LoserImpact,
+      // Top summary
+      clientCount,
+      totalMatters,
+      avgRevenuePerClient,
+      avgMonthsActive,
+      avgPerMonthMean,
+      weightedAvgPerMonth,
+      totalMonthsCeil,
     }
   }, [scenarioRows])
 
@@ -168,8 +226,107 @@ export function ClientsInteractive({ rows, initialRetainer }: Props) {
   const deltaDirection: "up" | "down" | "neutral" =
     summary.firmDelta > 0 ? "up" : summary.firmDelta < 0 ? "down" : "neutral"
 
+  const cohortActive = Boolean(firstFrom || firstTo)
+
   return (
     <div className="space-y-6">
+      {/* Top-row summary KPIs (cohort-aware) */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+        <KPICard
+          label="Clients"
+          value={summary.clientCount.toLocaleString()}
+          trend={`${summary.totalMatters.toLocaleString()} matters`}
+        />
+        <KPICard
+          label="Total Revenue"
+          value={formatCurrency(summary.totalActual)}
+          trend={`${formatCurrency(summary.avgRevenuePerClient)} / client avg`}
+        />
+        <KPICard
+          label="Avg Months Active"
+          value={summary.avgMonthsActive.toFixed(1)}
+          trend="mean per client"
+        />
+        <KPICard
+          label="Avg $ / Active Month"
+          value={formatCurrency(summary.avgPerMonthMean)}
+          trend="mean of per-client ratios"
+        />
+        <KPICard
+          label="Weighted $ / Month"
+          value={formatCurrency(summary.weightedAvgPerMonth)}
+          trend="total rev ÷ total months"
+        />
+      </div>
+
+      {/* Cohort filter */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Client Cohort Filter</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap items-end gap-4">
+            <div className="flex flex-col gap-1">
+              <Label className="text-xs text-muted-foreground">First activity from</Label>
+              <Input
+                type="date"
+                value={firstFrom}
+                onChange={(e) => {
+                  const v = e.target.value
+                  setFirstFrom(v)
+                  syncCohortToUrl(v, firstTo)
+                }}
+                className="w-40 h-9"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <Label className="text-xs text-muted-foreground">First activity to</Label>
+              <Input
+                type="date"
+                value={firstTo}
+                onChange={(e) => {
+                  const v = e.target.value
+                  setFirstTo(v)
+                  syncCohortToUrl(firstFrom, v)
+                }}
+                className="w-40 h-9"
+              />
+            </div>
+            {cohortActive && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setFirstFrom("")
+                  setFirstTo("")
+                  syncCohortToUrl("", "")
+                }}
+              >
+                <X className="size-3.5 mr-1" />
+                Clear cohort
+              </Button>
+            )}
+            <p className="text-xs text-muted-foreground ml-auto max-w-md">
+              Filters the list by each client&rsquo;s <strong>first ever</strong> activity date
+              (across all their matters). Every KPI, histogram, and scenario metric below reflects
+              the selected cohort.
+            </p>
+          </div>
+          {cohortActive && (
+            <p className="mt-3 text-xs text-blue-700">
+              Showing {summary.clientCount.toLocaleString()} of {rows.length.toLocaleString()}{" "}
+              clients whose first activity falls
+              {firstFrom && firstTo
+                ? ` between ${firstFrom} and ${firstTo}`
+                : firstFrom
+                  ? ` on or after ${firstFrom}`
+                  : ` on or before ${firstTo}`}
+              .
+            </p>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Scenario Controls */}
       <Card>
         <CardHeader className="pb-3">
@@ -270,19 +427,26 @@ export function ClientsInteractive({ rows, initialRetainer }: Props) {
         <KPICard
           label="Firm-Level Break-Even"
           value={formatCurrency(summary.firmBreakEven)}
-          trend="retainer where firm revenue is unchanged"
+          trend="keeps total firm revenue unchanged"
         />
         <KPICard
           label="Per-Client Median Break-Even"
           value={formatCurrency(summary.medianBreakEven)}
-          trend="retainer where half of clients earn more"
+          trend="typical client — half earn more at this rate"
         />
         <KPICard
           label="Per-Client Mean Break-Even"
           value={formatCurrency(summary.meanBreakEven)}
-          trend="mean of per-client $/month (outlier-sensitive)"
+          trend="simple average — pulled up by high-value outliers"
         />
       </div>
+
+      <BreakEvenExplainer
+        entity="client"
+        firmBreakEven={summary.firmBreakEven}
+        medianBreakEven={summary.medianBreakEven}
+        meanBreakEven={summary.meanBreakEven}
+      />
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <KPICard

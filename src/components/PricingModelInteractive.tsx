@@ -24,6 +24,7 @@ import {
   Minus,
 } from "lucide-react"
 import { KPICard } from "@/components/charts/KPICard"
+import { BreakEvenExplainer } from "@/components/BreakEvenExplainer"
 import {
   WinnersLosersHistogram,
   RevenueDensityHistogram,
@@ -228,19 +229,26 @@ export function PricingModelInteractive({
         <KPICard
           label="Firm-Level Break-Even"
           value={formatCurrency(breakEven.firmLevel)}
-          trend="Retainer where total firm revenue is unchanged"
+          trend="keeps total firm revenue unchanged"
         />
         <KPICard
           label="Per-Matter Median Break-Even"
           value={formatCurrency(breakEven.perMatterMedian)}
-          trend="Retainer where half of matters earn more"
+          trend="typical matter — half earn more at this rate"
         />
         <KPICard
           label="Per-Matter Mean Break-Even"
           value={formatCurrency(breakEven.perMatterMean)}
-          trend="Mean monthly density (outlier-sensitive)"
+          trend="simple average — pulled up by high-value outliers"
         />
       </div>
+
+      <BreakEvenExplainer
+        entity="matter"
+        firmBreakEven={breakEven.firmLevel}
+        medianBreakEven={breakEven.perMatterMedian}
+        meanBreakEven={breakEven.perMatterMean}
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <WinnersLosersHistogram

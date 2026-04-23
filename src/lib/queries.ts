@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 import type { FilterState, Matter, Activity } from "@/lib/types"
+import { isExcludedClient } from "@/lib/utils/clients"
 
 export function parseFilters(searchParams: Record<string, string | string[] | undefined>): FilterState {
   const toArray = (v: string | string[] | undefined): string[] => {
@@ -61,7 +62,8 @@ export async function fetchMatters(
     if (data.length < PAGE) break
     offset += PAGE
   }
-  return all
+  // Globally exclude administrative/placeholder-client matters from all analysis.
+  return all.filter((m) => !isExcludedClient(m.clients))
 }
 
 export async function fetchActivities(
