@@ -11,6 +11,7 @@ export const maxDuration = 60
 export const revalidate = 300
 
 const DAYS_PER_MONTH = 30.44
+const DEFAULT_RETAINER = 1500
 
 export interface ClientRow {
   clientKey: string
@@ -32,6 +33,12 @@ export default async function ClientsPage({
   const params = await searchParams
   const supabase = await createClient()
   const filters = parseFilters(params)
+
+  const retainerParam = typeof params.retainer === "string" ? Number(params.retainer) : NaN
+  const retainer =
+    Number.isFinite(retainerParam) && retainerParam > 0
+      ? Math.min(10000, retainerParam)
+      : DEFAULT_RETAINER
 
   let matters: Awaited<ReturnType<typeof fetchMatters>>
   let activities: Activity[]
@@ -147,12 +154,44 @@ export default async function ClientsPage({
   const totalMonthsAll = rows.reduce((s, r) => s + r.monthsActive, 0)
   const weightedAvgPerMonth = totalMonthsAll > 0 ? totalRevenue / totalMonthsAll : 0
 
+  // Default-scenario summary at the URL retainer (just for the AI page context —
+  // the interactive UI recomputes client-side as the slider moves).
+  let scenarioWinners = 0
+  let scenarioLosers = 0
+  let scenarioHypothetical = 0
+  let scenarioRevenueAtRisk = 0
+  let scenarioRevenueCaptured = 0
+  for (const r of rows) {
+    const activeMonthsCeil = Math.max(1, Math.ceil(r.monthsActive))
+    const hypothetical = activeMonthsCeil * retainer
+    const delta = hypothetical - r.totalBillable
+    scenarioHypothetical += hypothetical
+    if (delta > 0) {
+      scenarioWinners++
+      scenarioRevenueCaptured += delta
+    } else if (delta < 0) {
+      scenarioLosers++
+      scenarioRevenueAtRisk += -delta
+    }
+  }
+  const scenarioDelta = scenarioHypothetical - totalRevenue
+  const firmBreakEven = totalMonthsAll > 0 ? totalRevenue / totalMonthsAll : 0
+
   const pageContext = `Page: Clients
 ${clientCount} clients across ${totalMatters} matters, total revenue ${formatCurrency(totalRevenue)}.
 Average revenue per client: ${formatCurrency(avgRevenuePerClient)}
 Average months active per client: ${avgMonthsActive.toFixed(1)} months
 Average revenue per active month (mean of per-client ratios): ${formatCurrency(avgPerMonthMean)}
 Weighted average ($ per active month across the firm): ${formatCurrency(weightedAvgPerMonth)}
+
+Retainer scenario at ${formatCurrency(retainer)}/month (active months floored to 1 per client):
+- Revenue under retainer: ${formatCurrency(scenarioHypothetical)} vs. ${formatCurrency(totalRevenue)} actual hourly
+- Firm revenue delta: ${formatCurrency(scenarioDelta)}
+- Winners (would earn more under retainer): ${scenarioWinners}
+- Losers (would earn less under retainer): ${scenarioLosers}
+- Revenue at risk (sum of loser deltas): ${formatCurrency(scenarioRevenueAtRisk)}
+- Revenue captured (sum of winner deltas): ${formatCurrency(scenarioRevenueCaptured)}
+- Firm-level break-even retainer: ${formatCurrency(firmBreakEven)}
 
 Top 5 clients by revenue: ${rows
     .slice(0, 5)
@@ -165,8 +204,14 @@ Top 5 clients by revenue: ${rows
         <h1 className="text-2xl font-bold tracking-tight">Clients</h1>
         <p className="text-muted-foreground text-sm mt-1">
           One row per client, aggregated across all their matters. Months active = first to last
-          activity date across the client&rsquo;s matters. Summary KPIs recalculate whenever you
-          change filters.
+          activity date across the client&rsquo;s matters. Use the retainer slider below to model
+          a flat-monthly scenario: every KPI, histogram, and the Delta column recalculate live.
+        </p>
+        <p className="text-xs text-muted-foreground mt-2">
+          Decision inputs to weigh separately: tenure distribution of winners vs. losers (very
+          short-tenure winners may not sign a retainer), acceptance-rate assumptions (some current
+          losers would refuse a higher rate), single-matter vs. multi-matter client mix
+          (retainers suit ongoing engagements), and potential tiered-retainer segmentation.
         </p>
       </div>
 
@@ -178,7 +223,7 @@ Top 5 clients by revenue: ${rows
         <KPICard label="Weighted $ / Month" value={formatCurrency(weightedAvgPerMonth)} trend="total rev ÷ total months" />
       </div>
 
-      <ClientsInteractive rows={rows} />
+      <ClientsInteractive rows={rows} initialRetainer={retainer} />
 
       <AIChatAssistant pageContext={pageContext} />
     </div>
