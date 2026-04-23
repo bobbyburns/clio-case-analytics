@@ -1,5 +1,6 @@
+import type { SupabaseClient } from "@supabase/supabase-js"
 import { createClient } from "@/lib/supabase/server"
-import { parseFilters, fetchMatters, fetchActivities } from "@/lib/queries"
+import { parseFilters, fetchMatters } from "@/lib/queries"
 import { PricingModelInteractive } from "@/components/PricingModelInteractive"
 import { AIChatAssistant } from "@/components/AIChatAssistant"
 import {
@@ -12,9 +13,12 @@ import {
 } from "@/lib/utils/pricing"
 import { parseClientsField } from "@/lib/utils/clients"
 import { formatCurrency } from "@/lib/utils/format"
+import type { Activity } from "@/lib/types"
 
 const DEFAULT_RETAINER = 1500
 const TOP_CLIENTS_COUNT = 10
+
+export const maxDuration = 60
 
 export default async function PricingModelPage({
   searchParams,
@@ -29,10 +33,13 @@ export default async function PricingModelPage({
   const retainer = Number.isFinite(retainerParam) && retainerParam > 0 ? retainerParam : DEFAULT_RETAINER
   const excludeOutliers = params.excludeOutliers === "1"
 
-  const [matters, activities] = await Promise.all([
-    fetchMatters(supabase, filters),
-    fetchActivities(supabase, filters),
-  ])
+  const matters = await fetchMatters(supabase, filters)
+  const activities = await fetchPricingActivities(
+    supabase,
+    matters.map((m) => m.unique_id),
+    filters.dateFrom,
+    filters.dateTo,
+  )
 
   const allScenarioMatters = buildScenarioMatters(matters, activities)
 
@@ -126,6 +133,41 @@ Top 5 clients by avg monthly value: ${clientLeaderboard
       <AIChatAssistant pageContext={pageContext} />
     </div>
   )
+}
+
+/** Fetch only the activity columns this page needs, scoped to the supplied matter IDs.
+ *  Chunks the IN() clause to stay under PostgREST URL limits and avoids full-table scans. */
+async function fetchPricingActivities(
+  supabase: SupabaseClient,
+  matterIds: string[],
+  dateFrom: string | null,
+  dateTo: string | null,
+): Promise<Activity[]> {
+  if (matterIds.length === 0) return []
+  const COLS =
+    "matter_unique_id,activity_date,billable_amount,flat_rate,hours,rate,type,user_name,description,bill_state,nonbillable_amount"
+  const ID_CHUNK = 300
+  const PAGE = 1000
+  const all: Activity[] = []
+
+  for (let i = 0; i < matterIds.length; i += ID_CHUNK) {
+    const idChunk = matterIds.slice(i, i + ID_CHUNK)
+    let offset = 0
+    while (true) {
+      let q = supabase.from("clio_activities").select(COLS).in("matter_unique_id", idChunk)
+      if (dateFrom) q = q.gte("activity_date", dateFrom)
+      if (dateTo) q = q.lte("activity_date", dateTo)
+      const { data, error } = await q
+        .order("activity_date", { ascending: true })
+        .range(offset, offset + PAGE - 1)
+      if (error) throw error
+      if (!data || data.length === 0) break
+      all.push(...(data as unknown as Activity[]))
+      if (data.length < PAGE) break
+      offset += PAGE
+    }
+  }
+  return all
 }
 
 function excludeTopByBillable(matters: ScenarioMatter[], pct: number): ScenarioMatter[] {
