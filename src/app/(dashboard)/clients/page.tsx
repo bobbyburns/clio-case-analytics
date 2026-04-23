@@ -64,6 +64,8 @@ export default async function ClientsPage({
       : DEFAULT_RETAINER
   const firstFrom = typeof params.firstFrom === "string" ? params.firstFrom : ""
   const firstTo = typeof params.firstTo === "string" ? params.firstTo : ""
+  const typesParam = typeof params.types === "string" ? params.types : ""
+  const initialTypes = typesParam ? typesParam.split(",").filter(Boolean) : []
 
   let matters: Awaited<ReturnType<typeof fetchMatters>>
   let activities: Activity[]
@@ -316,6 +318,7 @@ Top 5 clients by revenue: ${rows
         initialRetainer={retainer}
         initialFirstFrom={firstFrom}
         initialFirstTo={firstTo}
+        initialTypes={initialTypes}
       />
 
       <AIChatAssistant pageContext={pageContext} />

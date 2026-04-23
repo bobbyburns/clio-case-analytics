@@ -67,6 +67,7 @@ interface Props {
   initialRetainer: number
   initialFirstFrom: string
   initialFirstTo: string
+  initialTypes: string[]
 }
 
 export function ClientsInteractive({
@@ -74,6 +75,7 @@ export function ClientsInteractive({
   initialRetainer,
   initialFirstFrom,
   initialFirstTo,
+  initialTypes,
 }: Props) {
   const router = useRouter()
   const pathname = usePathname()
@@ -84,7 +86,14 @@ export function ClientsInteractive({
   const [firstFrom, setFirstFrom] = useState(initialFirstFrom)
   const [firstTo, setFirstTo] = useState(initialFirstTo)
   const [scenarioFilter, setScenarioFilter] = useState<ScenarioFilter>("all")
-  const [typeFilter, setTypeFilter] = useState<Set<EngagementType>>(new Set())
+  const [typeFilter, setTypeFilter] = useState<Set<EngagementType>>(
+    () =>
+      new Set(
+        initialTypes.filter((t): t is EngagementType =>
+          (ENGAGEMENT_TYPES as string[]).includes(t),
+        ),
+      ),
+  )
   const [search, setSearch] = useState("")
   const [sortKey, setSortKey] = useState<SortKey>("totalBillable")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc")
@@ -147,16 +156,33 @@ export function ClientsInteractive({
     [router, pathname, searchParams],
   )
 
-  // Cohort filter: narrow rows by each client's first_activity_date.
+  const syncTypesToUrl = useCallback(
+    (types: Set<EngagementType>) => {
+      const params = new URLSearchParams(searchParams.toString())
+      if (types.size > 0) params.set("types", Array.from(types).join(","))
+      else params.delete("types")
+      router.replace(`${pathname}?${params.toString()}`)
+    },
+    [router, pathname, searchParams],
+  )
+
+  // Cohort filter: narrow rows by each client's first_activity_date AND by engagement type.
+  // Every downstream metric (KPIs, break-even, histograms, scenario, table) derives from this.
   const cohortRows = useMemo(() => {
-    if (!firstFrom && !firstTo) return rows
-    return rows.filter((r) => {
-      if (!r.firstActivityDate) return !firstFrom && !firstTo
-      if (firstFrom && r.firstActivityDate < firstFrom) return false
-      if (firstTo && r.firstActivityDate > firstTo) return false
-      return true
-    })
-  }, [rows, firstFrom, firstTo])
+    let list = rows
+    if (firstFrom || firstTo) {
+      list = list.filter((r) => {
+        if (!r.firstActivityDate) return !firstFrom && !firstTo
+        if (firstFrom && r.firstActivityDate < firstFrom) return false
+        if (firstTo && r.firstActivityDate > firstTo) return false
+        return true
+      })
+    }
+    if (typeFilter.size > 0) {
+      list = list.filter((r) => typeFilter.has(r.engagementType))
+    }
+    return list
+  }, [rows, firstFrom, firstTo, typeFilter])
 
   const scenarioRows = useMemo<ScenarioRow[]>(() => {
     return cohortRows.map((r) => {
@@ -237,6 +263,18 @@ export function ClientsInteractive({
     }
   }, [scenarioRows])
 
+  // Counts reflect the date-cohort (not already-type-filtered), so pill counts show
+  // "clients available to toggle" — not zero when that type is currently deselected.
+  const dateCohortRows = useMemo(() => {
+    if (!firstFrom && !firstTo) return rows
+    return rows.filter((r) => {
+      if (!r.firstActivityDate) return !firstFrom && !firstTo
+      if (firstFrom && r.firstActivityDate < firstFrom) return false
+      if (firstTo && r.firstActivityDate > firstTo) return false
+      return true
+    })
+  }, [rows, firstFrom, firstTo])
+
   const typeCounts = useMemo(() => {
     const counts: Record<EngagementType, number> = {
       ongoing: 0,
@@ -245,18 +283,27 @@ export function ClientsInteractive({
       "flat-fee": 0,
       "legacy-migration": 0,
     }
-    for (const r of scenarioRows) counts[r.engagementType]++
+    for (const r of dateCohortRows) counts[r.engagementType]++
     return counts
-  }, [scenarioRows])
+  }, [dateCohortRows])
 
-  const toggleTypeFilter = useCallback((t: EngagementType) => {
-    setTypeFilter((prev) => {
-      const next = new Set(prev)
-      if (next.has(t)) next.delete(t)
-      else next.add(t)
-      return next
-    })
-  }, [])
+  const toggleTypeFilter = useCallback(
+    (t: EngagementType) => {
+      setTypeFilter((prev) => {
+        const next = new Set(prev)
+        if (next.has(t)) next.delete(t)
+        else next.add(t)
+        syncTypesToUrl(next)
+        return next
+      })
+    },
+    [syncTypesToUrl],
+  )
+
+  const clearTypeFilter = useCallback(() => {
+    setTypeFilter(new Set())
+    syncTypesToUrl(new Set())
+  }, [syncTypesToUrl])
 
   const densityBuckets = useMemo(
     () => densityHistogram(summary.densities),
@@ -273,7 +320,6 @@ export function ClientsInteractive({
     if (q) list = list.filter((r) => r.display.toLowerCase().includes(q))
     if (scenarioFilter === "winners") list = list.filter((r) => r.delta > 0)
     else if (scenarioFilter === "losers") list = list.filter((r) => r.delta < 0)
-    if (typeFilter.size > 0) list = list.filter((r) => typeFilter.has(r.engagementType))
 
     list = [...list]
     list.sort((a, b) => {
@@ -290,7 +336,7 @@ export function ClientsInteractive({
       return sortDir === "desc" ? (bv as number) - (av as number) : (av as number) - (bv as number)
     })
     return list
-  }, [scenarioRows, search, scenarioFilter, typeFilter, sortKey, sortDir])
+  }, [scenarioRows, search, scenarioFilter, sortKey, sortDir])
 
   const visible = filtered.slice(0, limit)
 
@@ -344,9 +390,13 @@ export function ClientsInteractive({
       {/* Cohort filter */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Client Cohort Filter</CardTitle>
+          <CardTitle className="text-base">Client Cohort Filters</CardTitle>
+          <p className="text-xs text-muted-foreground mt-1">
+            Everything below — KPIs, break-even values, histograms, scenario, and the table —
+            reflects only the clients selected here.
+          </p>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
           <div className="flex flex-wrap items-end gap-4">
             <div className="flex flex-col gap-1">
               <Label className="text-xs text-muted-foreground">First activity from</Label>
@@ -385,24 +435,84 @@ export function ClientsInteractive({
                 }}
               >
                 <X className="size-3.5 mr-1" />
-                Clear cohort
+                Clear dates
               </Button>
             )}
-            <p className="text-xs text-muted-foreground ml-auto max-w-md">
-              Filters the list by each client&rsquo;s <strong>first ever</strong> activity date
-              (across all their matters). Every KPI, histogram, and scenario metric below reflects
-              the selected cohort.
-            </p>
           </div>
-          {cohortActive && (
-            <p className="mt-3 text-xs text-blue-700">
+
+          {/* Engagement type filter */}
+          <div className="pt-3 border-t">
+            <div className="flex items-center gap-2 mb-2">
+              <Label className="text-xs text-muted-foreground">Engagement types</Label>
+              <span className="text-[10px] text-muted-foreground">
+                Click to include. Selecting none shows all.
+              </span>
+              {typeFilter.size > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={clearTypeFilter}
+                  className="h-6 text-xs ml-auto"
+                >
+                  <X className="size-3 mr-1" />
+                  Clear types
+                </Button>
+              )}
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              {ENGAGEMENT_TYPES.map((t) => {
+                const badge = ENGAGEMENT_BADGE[t]
+                const active = typeFilter.has(t)
+                const count = typeCounts[t]
+                return (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => toggleTypeFilter(t)}
+                    title={badge.title}
+                    className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium transition ${badge.className} ${
+                      active
+                        ? "ring-2 ring-offset-1 ring-foreground/30"
+                        : typeFilter.size > 0
+                          ? "opacity-40 hover:opacity-100"
+                          : "hover:opacity-90"
+                    }`}
+                  >
+                    {badge.label}
+                    <span className="ml-2 text-[11px] opacity-70">
+                      {count.toLocaleString()}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Active-filter summary */}
+          {(cohortActive || typeFilter.size > 0) && (
+            <p className="text-xs text-blue-700 pt-1">
               Showing {summary.clientCount.toLocaleString()} of {rows.length.toLocaleString()}{" "}
-              clients whose first activity falls
-              {firstFrom && firstTo
-                ? ` between ${firstFrom} and ${firstTo}`
-                : firstFrom
-                  ? ` on or after ${firstFrom}`
-                  : ` on or before ${firstTo}`}
+              clients
+              {cohortActive && (
+                <>
+                  {" "}
+                  with first activity
+                  {firstFrom && firstTo
+                    ? ` between ${firstFrom} and ${firstTo}`
+                    : firstFrom
+                      ? ` on or after ${firstFrom}`
+                      : ` on or before ${firstTo}`}
+                </>
+              )}
+              {typeFilter.size > 0 && (
+                <>
+                  {cohortActive ? ", " : " "}
+                  of type{typeFilter.size > 1 ? "s" : ""}:{" "}
+                  {Array.from(typeFilter)
+                    .map((t) => ENGAGEMENT_BADGE[t].label)
+                    .join(", ")}
+                </>
+              )}
               .
             </p>
           )}
@@ -614,47 +724,6 @@ export function ClientsInteractive({
                 className="w-56 h-9"
               />
             </div>
-          </div>
-          {/* Engagement-type filter pills */}
-          <div className="flex items-center gap-2 flex-wrap mt-3 pt-3 border-t">
-            <span className="text-xs text-muted-foreground mr-1">Type:</span>
-            {ENGAGEMENT_TYPES.map((t) => {
-              const badge = ENGAGEMENT_BADGE[t]
-              const active = typeFilter.has(t)
-              const count = typeCounts[t]
-              return (
-                <button
-                  key={t}
-                  type="button"
-                  onClick={() => toggleTypeFilter(t)}
-                  title={badge.title}
-                  className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium transition ${badge.className} ${
-                    active
-                      ? "ring-2 ring-offset-1 ring-foreground/30"
-                      : typeFilter.size > 0
-                        ? "opacity-50 hover:opacity-100"
-                        : "hover:opacity-90"
-                  }`}
-                >
-                  {badge.label}
-                  <span className="ml-1.5 text-[10px] opacity-70">{count.toLocaleString()}</span>
-                </button>
-              )
-            })}
-            {typeFilter.size > 0 && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setTypeFilter(new Set())}
-                className="h-7 text-xs"
-              >
-                <X className="size-3 mr-1" />
-                Clear type filter
-              </Button>
-            )}
-            <span className="text-[10px] text-muted-foreground ml-auto">
-              Click to include. Selecting nothing shows all.
-            </span>
           </div>
         </CardHeader>
         <CardContent className="p-0">
