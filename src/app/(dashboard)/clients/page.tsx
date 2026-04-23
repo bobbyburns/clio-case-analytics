@@ -15,7 +15,8 @@ const DEFAULT_RETAINER = 1500
 export type EngagementType =
   | "ongoing" // span ≥ 30 days
   | "short-burst" // 2–29 days, ≥2 activities
-  | "single-activity" // activity_count == 1 but not legacy
+  | "single-activity" // exactly 1 activity across all their matters
+  | "unlogged" // zero activities across all their matters (new matter, nothing billed yet)
   | "flat-fee" // majority of billable revenue comes from flat_rate activities
   | "legacy-migration" // Xero balance-forward activities from 2016-11-06
 
@@ -44,6 +45,14 @@ export interface ClientRow {
   matterCount: number
   firstActivityDate: string | null
   lastActivityDate: string | null
+  /** Earliest open_date across all this client's matters — answers "when did this client onboard?". */
+  firstMatterOpenDate: string | null
+  /** Latest open_date across all this client's matters. */
+  lastMatterOpenDate: string | null
+  /** firstActivityDate, falling back to firstMatterOpenDate for activity-less matters.
+   *  This is what the cohort "first appearance" filter uses so brand-new matters
+   *  with no activities logged yet still show up. */
+  firstAppearance: string | null
   engagementType: EngagementType
   matters: ClientMatter[]
 }
@@ -64,6 +73,8 @@ export default async function ClientsPage({
       : DEFAULT_RETAINER
   const firstFrom = typeof params.firstFrom === "string" ? params.firstFrom : ""
   const firstTo = typeof params.firstTo === "string" ? params.firstTo : ""
+  const openFrom = typeof params.openFrom === "string" ? params.openFrom : ""
+  const openTo = typeof params.openTo === "string" ? params.openTo : ""
   const typesParam = typeof params.types === "string" ? params.types : ""
   const initialTypes = typesParam ? typesParam.split(",").filter(Boolean) : []
 
@@ -128,6 +139,7 @@ export default async function ClientsPage({
       totalBillable: number
       matterCount: number
       allActivityDates: string[]
+      allMatterOpenDates: string[]
       flatRateBillable: number
       legacyBillable: number
       matters: ClientMatter[]
@@ -163,6 +175,7 @@ export default async function ClientsPage({
       existing.totalBillable += billable
       existing.matterCount += 1
       existing.allActivityDates.push(...dates)
+      if (m.open_date) existing.allMatterOpenDates.push(m.open_date)
       existing.flatRateBillable += stats?.flatRateBillable ?? 0
       existing.legacyBillable += stats?.legacyBillable ?? 0
       existing.matters.push(clientMatter)
@@ -173,6 +186,7 @@ export default async function ClientsPage({
         totalBillable: billable,
         matterCount: 1,
         allActivityDates: [...dates],
+        allMatterOpenDates: m.open_date ? [m.open_date] : [],
         flatRateBillable: stats?.flatRateBillable ?? 0,
         legacyBillable: stats?.legacyBillable ?? 0,
         matters: [clientMatter],
@@ -195,21 +209,35 @@ export default async function ClientsPage({
       monthsActive = Math.max(0, spanDays / DAYS_PER_MONTH)
     }
 
+    const sortedOpens = [...v.allMatterOpenDates].sort()
+    const firstMatterOpenDate = sortedOpens[0] ?? null
+    const lastMatterOpenDate = sortedOpens[sortedOpens.length - 1] ?? null
+    // firstAppearance = firstActivity if we have activities, else falls back to earliest open_date
+    // so brand-new matters with zero activities logged still have a cohort date.
+    const firstAppearance = firstDate ?? firstMatterOpenDate
+
     // Engagement classification:
+    // - unlogged: zero activities across all their matters — new matter, nothing billed yet
     // - legacy-migration: majority of revenue is from Xero 2016-11-06 balance-forwards
     // - flat-fee: ≥70% of revenue is from flat_rate activities
-    // - single-activity: only 1 activity
+    // - single-activity: exactly 1 activity across all matters
     // - short-burst: span 2–29 days with multiple activities (OP/DV/quick-turn)
     // - ongoing: everything else (span ≥ 30 days OR fallback)
+    const totalActivityCount = v.matters.reduce(
+      (s, m) => s + (m.activity_count ?? 0),
+      0,
+    )
     let engagementType: EngagementType
     const hasRevenue = v.totalBillable > 0
     const legacyShare = hasRevenue ? v.legacyBillable / v.totalBillable : 0
     const flatShare = hasRevenue ? v.flatRateBillable / v.totalBillable : 0
-    if (legacyShare >= 0.5) {
+    if (totalActivityCount === 0) {
+      engagementType = "unlogged"
+    } else if (legacyShare >= 0.5) {
       engagementType = "legacy-migration"
     } else if (flatShare >= 0.7) {
       engagementType = "flat-fee"
-    } else if (v.allActivityDates.length <= 1) {
+    } else if (totalActivityCount === 1) {
       engagementType = "single-activity"
     } else if (spanDays < 30) {
       engagementType = "short-burst"
@@ -227,6 +255,9 @@ export default async function ClientsPage({
       matterCount: v.matterCount,
       firstActivityDate: firstDate,
       lastActivityDate: lastDate,
+      firstMatterOpenDate,
+      lastMatterOpenDate,
+      firstAppearance,
       engagementType,
       matters: v.matters,
     })
@@ -318,6 +349,8 @@ Top 5 clients by revenue: ${rows
         initialRetainer={retainer}
         initialFirstFrom={firstFrom}
         initialFirstTo={firstTo}
+        initialOpenFrom={openFrom}
+        initialOpenTo={openTo}
         initialTypes={initialTypes}
       />
 

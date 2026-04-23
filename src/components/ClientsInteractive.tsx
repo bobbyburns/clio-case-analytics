@@ -42,16 +42,18 @@ type ScenarioFilter = "all" | "winners" | "losers"
 const ENGAGEMENT_SORT_ORDER: Record<EngagementType, number> = {
   ongoing: 0,
   "short-burst": 1,
-  "single-activity": 2,
-  "flat-fee": 3,
-  "legacy-migration": 4,
+  "flat-fee": 2,
+  "single-activity": 3,
+  unlogged: 4,
+  "legacy-migration": 5,
 }
 
 const ENGAGEMENT_TYPES: EngagementType[] = [
   "ongoing",
   "short-burst",
-  "single-activity",
   "flat-fee",
+  "single-activity",
+  "unlogged",
   "legacy-migration",
 ]
 
@@ -67,6 +69,8 @@ interface Props {
   initialRetainer: number
   initialFirstFrom: string
   initialFirstTo: string
+  initialOpenFrom: string
+  initialOpenTo: string
   initialTypes: string[]
 }
 
@@ -75,6 +79,8 @@ export function ClientsInteractive({
   initialRetainer,
   initialFirstFrom,
   initialFirstTo,
+  initialOpenFrom,
+  initialOpenTo,
   initialTypes,
 }: Props) {
   const router = useRouter()
@@ -85,6 +91,8 @@ export function ClientsInteractive({
   const [retainerInput, setRetainerInput] = useState(String(initialRetainer))
   const [firstFrom, setFirstFrom] = useState(initialFirstFrom)
   const [firstTo, setFirstTo] = useState(initialFirstTo)
+  const [openFrom, setOpenFrom] = useState(initialOpenFrom)
+  const [openTo, setOpenTo] = useState(initialOpenTo)
   const [scenarioFilter, setScenarioFilter] = useState<ScenarioFilter>("all")
   const [typeFilter, setTypeFilter] = useState<Set<EngagementType>>(
     () =>
@@ -156,6 +164,18 @@ export function ClientsInteractive({
     [router, pathname, searchParams],
   )
 
+  const syncOpenToUrl = useCallback(
+    (from: string, to: string) => {
+      const params = new URLSearchParams(searchParams.toString())
+      if (from) params.set("openFrom", from)
+      else params.delete("openFrom")
+      if (to) params.set("openTo", to)
+      else params.delete("openTo")
+      router.replace(`${pathname}?${params.toString()}`)
+    },
+    [router, pathname, searchParams],
+  )
+
   const syncTypesToUrl = useCallback(
     (types: Set<EngagementType>) => {
       const params = new URLSearchParams(searchParams.toString())
@@ -166,23 +186,43 @@ export function ClientsInteractive({
     [router, pathname, searchParams],
   )
 
-  // Cohort filter: narrow rows by each client's first_activity_date AND by engagement type.
-  // Every downstream metric (KPIs, break-even, histograms, scenario, table) derives from this.
+  /** Does this client have any matter with open_date in the [from, to] range? */
+  const matterOpenInRange = useCallback(
+    (r: ClientRow, from: string, to: string) => {
+      if (!from && !to) return true
+      for (const m of r.matters) {
+        if (!m.open_date) continue
+        if (from && m.open_date < from) continue
+        if (to && m.open_date > to) continue
+        return true
+      }
+      return false
+    },
+    [],
+  )
+
+  // Cohort filter: narrows by first-appearance date, matter-open date, AND engagement type.
+  // firstAppearance falls back to earliest matter open_date for clients with zero activities,
+  // so brand-new unlogged clients aren't silently dropped.
   const cohortRows = useMemo(() => {
     let list = rows
     if (firstFrom || firstTo) {
       list = list.filter((r) => {
-        if (!r.firstActivityDate) return !firstFrom && !firstTo
-        if (firstFrom && r.firstActivityDate < firstFrom) return false
-        if (firstTo && r.firstActivityDate > firstTo) return false
+        const ref = r.firstAppearance
+        if (!ref) return false
+        if (firstFrom && ref < firstFrom) return false
+        if (firstTo && ref > firstTo) return false
         return true
       })
+    }
+    if (openFrom || openTo) {
+      list = list.filter((r) => matterOpenInRange(r, openFrom, openTo))
     }
     if (typeFilter.size > 0) {
       list = list.filter((r) => typeFilter.has(r.engagementType))
     }
     return list
-  }, [rows, firstFrom, firstTo, typeFilter])
+  }, [rows, firstFrom, firstTo, openFrom, openTo, typeFilter, matterOpenInRange])
 
   const scenarioRows = useMemo<ScenarioRow[]>(() => {
     return cohortRows.map((r) => {
@@ -266,21 +306,29 @@ export function ClientsInteractive({
   // Counts reflect the date-cohort (not already-type-filtered), so pill counts show
   // "clients available to toggle" — not zero when that type is currently deselected.
   const dateCohortRows = useMemo(() => {
-    if (!firstFrom && !firstTo) return rows
-    return rows.filter((r) => {
-      if (!r.firstActivityDate) return !firstFrom && !firstTo
-      if (firstFrom && r.firstActivityDate < firstFrom) return false
-      if (firstTo && r.firstActivityDate > firstTo) return false
-      return true
-    })
-  }, [rows, firstFrom, firstTo])
+    let list = rows
+    if (firstFrom || firstTo) {
+      list = list.filter((r) => {
+        const ref = r.firstAppearance
+        if (!ref) return false
+        if (firstFrom && ref < firstFrom) return false
+        if (firstTo && ref > firstTo) return false
+        return true
+      })
+    }
+    if (openFrom || openTo) {
+      list = list.filter((r) => matterOpenInRange(r, openFrom, openTo))
+    }
+    return list
+  }, [rows, firstFrom, firstTo, openFrom, openTo, matterOpenInRange])
 
   const typeCounts = useMemo(() => {
     const counts: Record<EngagementType, number> = {
       ongoing: 0,
       "short-burst": 0,
-      "single-activity": 0,
       "flat-fee": 0,
+      "single-activity": 0,
+      unlogged: 0,
       "legacy-migration": 0,
     }
     for (const r of dateCohortRows) counts[r.engagementType]++
@@ -354,7 +402,9 @@ export function ClientsInteractive({
   const deltaDirection: "up" | "down" | "neutral" =
     summary.firmDelta > 0 ? "up" : summary.firmDelta < 0 ? "down" : "neutral"
 
-  const cohortActive = Boolean(firstFrom || firstTo)
+  const firstActive = Boolean(firstFrom || firstTo)
+  const openActive = Boolean(openFrom || openTo)
+  const cohortActive = firstActive || openActive
 
   return (
     <div className="space-y-6">
@@ -397,47 +447,110 @@ export function ClientsInteractive({
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex flex-wrap items-end gap-4">
-            <div className="flex flex-col gap-1">
-              <Label className="text-xs text-muted-foreground">First activity from</Label>
-              <Input
-                type="date"
-                value={firstFrom}
-                onChange={(e) => {
-                  const v = e.target.value
-                  setFirstFrom(v)
-                  syncCohortToUrl(v, firstTo)
-                }}
-                className="w-40 h-9"
-              />
+          {/* First-appearance (cohort) filter */}
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <Label className="text-xs font-medium">Client first appearance</Label>
+              <span className="text-[11px] text-muted-foreground">
+                Brand-new cohort: clients whose first-ever activity (or earliest matter
+                open date if no activities logged yet) falls in this range.
+              </span>
             </div>
-            <div className="flex flex-col gap-1">
-              <Label className="text-xs text-muted-foreground">First activity to</Label>
-              <Input
-                type="date"
-                value={firstTo}
-                onChange={(e) => {
-                  const v = e.target.value
-                  setFirstTo(v)
-                  syncCohortToUrl(firstFrom, v)
-                }}
-                className="w-40 h-9"
-              />
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="flex flex-col gap-1">
+                <Label className="text-[10px] text-muted-foreground">From</Label>
+                <Input
+                  type="date"
+                  value={firstFrom}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    setFirstFrom(v)
+                    syncCohortToUrl(v, firstTo)
+                  }}
+                  className="w-40 h-9"
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <Label className="text-[10px] text-muted-foreground">To</Label>
+                <Input
+                  type="date"
+                  value={firstTo}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    setFirstTo(v)
+                    syncCohortToUrl(firstFrom, v)
+                  }}
+                  className="w-40 h-9"
+                />
+              </div>
+              {firstActive && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setFirstFrom("")
+                    setFirstTo("")
+                    syncCohortToUrl("", "")
+                  }}
+                >
+                  <X className="size-3.5 mr-1" />
+                  Clear
+                </Button>
+              )}
             </div>
-            {cohortActive && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setFirstFrom("")
-                  setFirstTo("")
-                  syncCohortToUrl("", "")
-                }}
-              >
-                <X className="size-3.5 mr-1" />
-                Clear dates
-              </Button>
-            )}
+          </div>
+
+          {/* Matter-opened filter */}
+          <div className="pt-3 border-t">
+            <div className="flex items-center gap-2 mb-2">
+              <Label className="text-xs font-medium">Matter opened date</Label>
+              <span className="text-[11px] text-muted-foreground">
+                Any matter opened in this range — includes returning clients. Use this for
+                &ldquo;who did we onboard a case for in this range?&rdquo;
+              </span>
+            </div>
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="flex flex-col gap-1">
+                <Label className="text-[10px] text-muted-foreground">From</Label>
+                <Input
+                  type="date"
+                  value={openFrom}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    setOpenFrom(v)
+                    syncOpenToUrl(v, openTo)
+                  }}
+                  className="w-40 h-9"
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <Label className="text-[10px] text-muted-foreground">To</Label>
+                <Input
+                  type="date"
+                  value={openTo}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    setOpenTo(v)
+                    syncOpenToUrl(openFrom, v)
+                  }}
+                  className="w-40 h-9"
+                />
+              </div>
+              {openActive && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setOpenFrom("")
+                    setOpenTo("")
+                    syncOpenToUrl("", "")
+                  }}
+                >
+                  <X className="size-3.5 mr-1" />
+                  Clear
+                </Button>
+              )}
+            </div>
           </div>
 
           {/* Engagement type filter */}
@@ -491,29 +604,40 @@ export function ClientsInteractive({
           {/* Active-filter summary */}
           {(cohortActive || typeFilter.size > 0) && (
             <p className="text-xs text-blue-700 pt-1">
-              Showing {summary.clientCount.toLocaleString()} of {rows.length.toLocaleString()}{" "}
-              clients
-              {cohortActive && (
+              Showing {summary.clientCount.toLocaleString()} of{" "}
+              {rows.length.toLocaleString()} clients
+              {firstActive && (
                 <>
                   {" "}
-                  with first activity
+                  · first appearance
                   {firstFrom && firstTo
                     ? ` between ${firstFrom} and ${firstTo}`
                     : firstFrom
-                      ? ` on or after ${firstFrom}`
-                      : ` on or before ${firstTo}`}
+                      ? ` on/after ${firstFrom}`
+                      : ` on/before ${firstTo}`}
+                </>
+              )}
+              {openActive && (
+                <>
+                  {" "}
+                  · matter opened
+                  {openFrom && openTo
+                    ? ` between ${openFrom} and ${openTo}`
+                    : openFrom
+                      ? ` on/after ${openFrom}`
+                      : ` on/before ${openTo}`}
                 </>
               )}
               {typeFilter.size > 0 && (
                 <>
-                  {cohortActive ? ", " : " "}
-                  of type{typeFilter.size > 1 ? "s" : ""}:{" "}
+                  {" "}
+                  · type
+                  {typeFilter.size > 1 ? "s" : ""}:{" "}
                   {Array.from(typeFilter)
                     .map((t) => ENGAGEMENT_BADGE[t].label)
                     .join(", ")}
                 </>
               )}
-              .
             </p>
           )}
         </CardContent>
@@ -829,7 +953,13 @@ const ENGAGEMENT_BADGE: Record<
     label: "Single activity",
     className: "bg-slate-100 text-slate-700 border-slate-200",
     title:
-      "Only one activity on record. Often a consultation, filing fee, or legacy entry.",
+      "Exactly one activity on record. Often a consultation, filing fee, or legacy entry.",
+  },
+  unlogged: {
+    label: "Unlogged",
+    className: "bg-orange-50 text-orange-700 border-orange-200",
+    title:
+      "Zero activities across all their matters. Usually brand-new intake with time not yet entered — worth auditing if the matter is >2 weeks old.",
   },
   "flat-fee": {
     label: "Flat fee",
