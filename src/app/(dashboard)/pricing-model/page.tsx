@@ -33,13 +33,40 @@ export default async function PricingModelPage({
   const retainer = Number.isFinite(retainerParam) && retainerParam > 0 ? retainerParam : DEFAULT_RETAINER
   const excludeOutliers = params.excludeOutliers === "1"
 
-  const matters = await fetchMatters(supabase, filters)
-  const activities = await fetchPricingActivities(
-    supabase,
-    matters.map((m) => m.unique_id),
-    filters.dateFrom,
-    filters.dateTo,
-  )
+  const t0 = Date.now()
+  let matters: Awaited<ReturnType<typeof fetchMatters>>
+  let activities: Activity[]
+  try {
+    matters = await fetchMatters(supabase, filters)
+    console.log(`[pricing-model] fetched ${matters.length} matters in ${Date.now() - t0}ms`)
+    const t1 = Date.now()
+    activities = await fetchPricingActivities(
+      supabase,
+      matters.map((m) => m.unique_id),
+      filters.dateFrom,
+      filters.dateTo,
+    )
+    console.log(
+      `[pricing-model] fetched ${activities.length} activities in ${Date.now() - t1}ms`,
+    )
+  } catch (err) {
+    const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+    console.error("[pricing-model] data fetch failed:", msg)
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Pricing Model Analysis</h1>
+        </div>
+        <div className="rounded-lg border border-rose-200 bg-rose-50 p-6">
+          <h2 className="font-semibold text-rose-800">Data load failed</h2>
+          <p className="mt-2 text-sm text-rose-700 font-mono whitespace-pre-wrap">{msg}</p>
+          <p className="mt-3 text-xs text-rose-600">
+            Try narrowing the filters (add a date range or select a specific case type) and reload.
+          </p>
+        </div>
+      </div>
+    )
+  }
 
   const allScenarioMatters = buildScenarioMatters(matters, activities)
 
@@ -146,7 +173,7 @@ async function fetchPricingActivities(
   if (matterIds.length === 0) return []
   const COLS =
     "matter_unique_id,activity_date,billable_amount,flat_rate,hours,rate,type,user_name,description,bill_state,nonbillable_amount"
-  const ID_CHUNK = 300
+  const ID_CHUNK = 100
   const PAGE = 1000
   const all: Activity[] = []
 
