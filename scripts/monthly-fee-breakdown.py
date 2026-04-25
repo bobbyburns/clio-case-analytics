@@ -2,9 +2,11 @@
 Detailed breakdown of monthly flat fee math.
 Shows exactly how each fee level maps to actual cases.
 """
-import json, urllib.request, statistics, sys
+import json, os, urllib.request, statistics, sys
 
-SRK = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZld3Z6cWt5cGZ3emFrcHl4Y3VwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NjcxMTQ2MywiZXhwIjoyMDkyMjg3NDYzfQ.RwkXuhGMs4Pwfp8YlKgpCSHHFr28kQcqNh2qgt853NY"
+SRK = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+if not SRK:
+    sys.exit("Set SUPABASE_SERVICE_ROLE_KEY in your environment before running this script.")
 BASE = "https://fewvzqkypfwzakpyxcup.supabase.co/rest/v1"
 
 def fetch_all(table, params=""):
