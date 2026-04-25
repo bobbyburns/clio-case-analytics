@@ -708,6 +708,11 @@ export function ClientsInteractive({
             pro-rated below a month). Delta = <em>retainer × ceil(months)</em> −{" "}
             <em>total billable</em>.
           </p>
+          <ScenarioMathAudit
+            scenarioRows={scenarioRows}
+            retainer={retainer}
+            summary={summary}
+          />
         </CardContent>
       </Card>
 
@@ -1218,5 +1223,203 @@ function ScenarioClientRow({
         </TableRow>
       )}
     </>
+  )
+}
+
+interface SummaryShape {
+  totalActual: number
+  totalHypothetical: number
+  firmDelta: number
+  winnerCount: number
+  loserCount: number
+  totalMonthsCeil: number
+  clientCount: number
+}
+
+function ScenarioMathAudit({
+  scenarioRows,
+  retainer,
+  summary,
+}: {
+  scenarioRows: ScenarioRow[]
+  retainer: number
+  summary: SummaryShape
+}) {
+  const [open, setOpen] = useState(false)
+
+  const audit = useMemo(() => {
+    const monthsBuckets = new Map<number, number>()
+    let monthsZero = 0
+    let monthsCeilOne = 0
+    let activitiesTotalCount = 0
+    let totalBillableNoActivity = 0
+    let zeroActivityClients = 0
+    let zeroActivityNonZeroBillable = 0
+    let sumHypothetical = 0
+    let sumActual = 0
+
+    for (const r of scenarioRows) {
+      const ceil = r.activeMonthsCeil
+      monthsBuckets.set(ceil, (monthsBuckets.get(ceil) ?? 0) + 1)
+      if (r.monthsActive === 0) monthsZero++
+      if (ceil === 1) monthsCeilOne++
+      const activityCount = r.matters.reduce((s, m) => s + (m.activity_count ?? 0), 0)
+      activitiesTotalCount += activityCount
+      if (activityCount === 0) {
+        zeroActivityClients++
+        if (r.totalBillable > 0) {
+          zeroActivityNonZeroBillable++
+          totalBillableNoActivity += r.totalBillable
+        }
+      }
+      sumHypothetical += r.hypothetical
+      sumActual += r.totalBillable
+    }
+
+    const sortedBuckets = Array.from(monthsBuckets.entries()).sort((a, b) => a[0] - b[0])
+    const samples = scenarioRows.slice(0, 5)
+
+    return {
+      monthsZero,
+      monthsCeilOne,
+      activitiesTotalCount,
+      totalBillableNoActivity,
+      zeroActivityClients,
+      zeroActivityNonZeroBillable,
+      sumHypothetical,
+      sumActual,
+      sortedBuckets,
+      samples,
+    }
+  }, [scenarioRows])
+
+  const expectedHypotheticalFromMonthsCeilSum = summary.totalMonthsCeil * retainer
+
+  return (
+    <div className="mt-4 border-t border-border pt-3">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="text-xs font-medium text-blue-600 hover:underline"
+      >
+        {open ? "Hide" : "Show"} math
+      </button>
+      {open && (
+        <div className="mt-3 space-y-4 text-xs font-mono bg-muted/30 rounded-md p-4">
+          <section>
+            <div className="font-semibold mb-1">Inputs</div>
+            <div>retainer = {formatCurrency(retainer)} / mo</div>
+            <div>in-scope clients = {summary.clientCount.toLocaleString()}</div>
+          </section>
+
+          <section>
+            <div className="font-semibold mb-1">Per-client formula (applied to each row)</div>
+            <div>activeMonthsCeil = max(1, ceil(monthsActive))</div>
+            <div>hypothetical = activeMonthsCeil × retainer</div>
+            <div>delta = hypothetical − totalBillable</div>
+          </section>
+
+          <section>
+            <div className="font-semibold mb-1">Firm-level totals</div>
+            <div>
+              Σ activeMonthsCeil = {summary.totalMonthsCeil.toLocaleString()} months
+            </div>
+            <div>
+              Σ activeMonthsCeil × retainer = {summary.totalMonthsCeil.toLocaleString()} ×{" "}
+              {formatCurrency(retainer)} = {formatCurrency(expectedHypotheticalFromMonthsCeilSum)}
+            </div>
+            <div>
+              Σ hypothetical (per-row) = {formatCurrency(audit.sumHypothetical)}{" "}
+              {Math.abs(audit.sumHypothetical - expectedHypotheticalFromMonthsCeilSum) < 0.5 ? (
+                <span className="text-emerald-600">✓ matches</span>
+              ) : (
+                <span className="text-rose-600">✗ MISMATCH</span>
+              )}
+            </div>
+            <div>Σ totalBillable = {formatCurrency(audit.sumActual)}</div>
+            <div>
+              Firm Delta = {formatCurrency(audit.sumHypothetical)} −{" "}
+              {formatCurrency(audit.sumActual)} ={" "}
+              {formatCurrency(audit.sumHypothetical - audit.sumActual)}
+            </div>
+          </section>
+
+          <section>
+            <div className="font-semibold mb-1">activeMonthsCeil distribution</div>
+            <div className="text-muted-foreground mb-1">
+              Most clients with monthsActive=0 (no activity span) get bumped to ceil=1.
+            </div>
+            {audit.sortedBuckets.slice(0, 12).map(([ceil, count]) => {
+              const pct = (count / Math.max(1, summary.clientCount)) * 100
+              return (
+                <div key={ceil}>
+                  ceil={ceil} mo → {count.toLocaleString()} clients ({pct.toFixed(1)}%)
+                </div>
+              )
+            })}
+            {audit.sortedBuckets.length > 12 && (
+              <div className="text-muted-foreground">… {audit.sortedBuckets.length - 12} more buckets</div>
+            )}
+          </section>
+
+          <section>
+            <div className="font-semibold mb-1">Activity-vs-billable sanity check</div>
+            <div>monthsActive = 0 (no activity span): {audit.monthsZero.toLocaleString()}</div>
+            <div>
+              clients w/ 0 activities total: {audit.zeroActivityClients.toLocaleString()}
+            </div>
+            <div>
+              … of which totalBillable {">"} 0:{" "}
+              <span className={audit.zeroActivityNonZeroBillable > 0 ? "text-rose-600 font-bold" : ""}>
+                {audit.zeroActivityNonZeroBillable.toLocaleString()}
+              </span>
+            </div>
+            <div>
+              … sum of totalBillable on 0-activity clients ={" "}
+              <span className={audit.totalBillableNoActivity > 0 ? "text-rose-600 font-bold" : ""}>
+                {formatCurrency(audit.totalBillableNoActivity)}
+              </span>
+            </div>
+            <div>Σ activity_count across in-scope clients = {audit.activitiesTotalCount.toLocaleString()}</div>
+          </section>
+
+          <section>
+            <div className="font-semibold mb-1">First 5 rows — expanded math</div>
+            <div className="overflow-x-auto">
+              <table className="text-[11px] w-full">
+                <thead className="text-left text-muted-foreground">
+                  <tr>
+                    <th className="pr-3">client</th>
+                    <th className="pr-3">monthsActive (raw)</th>
+                    <th className="pr-3">ceil</th>
+                    <th className="pr-3">totalBillable</th>
+                    <th className="pr-3">hypo = ceil × retainer</th>
+                    <th className="pr-3">delta</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {audit.samples.map((r) => (
+                    <tr key={r.clientKey} className="align-top">
+                      <td className="pr-3 truncate max-w-[120px]">{r.display}</td>
+                      <td className="pr-3">{r.monthsActive.toFixed(3)}</td>
+                      <td className="pr-3">{r.activeMonthsCeil}</td>
+                      <td className="pr-3">{formatCurrency(r.totalBillable)}</td>
+                      <td className="pr-3">{formatCurrency(r.hypothetical)}</td>
+                      <td
+                        className={
+                          r.delta < 0 ? "pr-3 text-rose-600" : "pr-3 text-emerald-600"
+                        }
+                      >
+                        {formatCurrency(r.delta)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      )}
+    </div>
   )
 }
