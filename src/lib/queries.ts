@@ -174,6 +174,29 @@ export interface MatterRollup {
   last_activity_date: string | null
 }
 
+/** Page-through an RPC that returns rows. PostgREST caps responses at the
+ *  project's max-rows (default 1000), silently truncating large rollups. */
+async function pagedRpc<T>(
+  supabase: SupabaseClient,
+  fn: string,
+  args: Record<string, unknown>,
+): Promise<T[]> {
+  const all: T[] = []
+  const PAGE = 1000
+  let offset = 0
+  while (true) {
+    const { data, error } = await supabase
+      .rpc(fn, args)
+      .range(offset, offset + PAGE - 1)
+    if (error) throw error
+    const rows = (data as T[]) ?? []
+    all.push(...rows)
+    if (rows.length < PAGE) break
+    offset += PAGE
+  }
+  return all
+}
+
 /** One-shot per-matter rollup — replaces fetchActivitiesForMatters() in the
  *  Pricing Model and Clients pages. Server-side aggregation drops the wire size
  *  from ~70k activity rows to ~2k matter rows. */
@@ -181,13 +204,12 @@ export async function fetchMatterRollup(
   supabase: SupabaseClient,
   filters: Pick<FilterState, "dateFrom" | "dateTo">,
 ): Promise<Map<string, MatterRollup>> {
-  const { data, error } = await supabase.rpc("matter_activity_rollup", {
+  const rows = await pagedRpc<MatterRollup>(supabase, "matter_activity_rollup", {
     date_from: filters.dateFrom,
     date_to: filters.dateTo,
   })
-  if (error) throw error
   const map = new Map<string, MatterRollup>()
-  for (const row of (data as MatterRollup[]) ?? []) {
+  for (const row of rows) {
     map.set(row.matter_unique_id, row)
   }
   return map
@@ -198,14 +220,17 @@ export async function fetchMonthlyFirmRevenue(
   filters: Pick<FilterState, "dateFrom" | "dateTo">,
   hourlyOnly = false,
 ): Promise<Map<string, number>> {
-  const { data, error } = await supabase.rpc("monthly_firm_revenue", {
-    date_from: filters.dateFrom,
-    date_to: filters.dateTo,
-    hourly_only: hourlyOnly,
-  })
-  if (error) throw error
+  const rows = await pagedRpc<{ month: string; billable: number }>(
+    supabase,
+    "monthly_firm_revenue",
+    {
+      date_from: filters.dateFrom,
+      date_to: filters.dateTo,
+      hourly_only: hourlyOnly,
+    },
+  )
   const map = new Map<string, number>()
-  for (const row of (data as Array<{ month: string; billable: number }>) ?? []) {
+  for (const row of rows) {
     map.set(row.month, Number(row.billable))
   }
   return map
@@ -222,13 +247,16 @@ export async function fetchMatterMonthlyBillable(
   filters: Pick<FilterState, "dateFrom" | "dateTo">,
   hourlyOnly = false,
 ): Promise<MatterMonthlyBillable[]> {
-  const { data, error } = await supabase.rpc("matter_monthly_billable", {
-    date_from: filters.dateFrom,
-    date_to: filters.dateTo,
-    hourly_only: hourlyOnly,
-  })
-  if (error) throw error
-  return ((data as MatterMonthlyBillable[]) ?? []).map((r) => ({
+  const rows = await pagedRpc<MatterMonthlyBillable>(
+    supabase,
+    "matter_monthly_billable",
+    {
+      date_from: filters.dateFrom,
+      date_to: filters.dateTo,
+      hourly_only: hourlyOnly,
+    },
+  )
+  return rows.map((r) => ({
     matter_unique_id: r.matter_unique_id,
     month: r.month,
     billable: Number(r.billable),
