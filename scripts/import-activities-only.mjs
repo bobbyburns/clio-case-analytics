@@ -151,6 +151,11 @@ async function main() {
     }
   }
   console.log(`  Done. Updated ${updated} matters.`);
+
+  console.log("\nRefreshing materialized rollups...");
+  const { error: refreshErr } = await supabase.rpc("refresh_rollups");
+  if (refreshErr) console.warn("  refresh_rollups failed:", refreshErr.message);
+
   console.log("\n✅ Import complete!");
 }
 

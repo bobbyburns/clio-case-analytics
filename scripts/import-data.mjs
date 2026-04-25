@@ -252,6 +252,11 @@ async function main() {
   await importActivities(matters);
   await updateMatterAggregates();
 
+  console.log("\nRefreshing materialized rollups...");
+  const { error: refreshErr } = await supabase.rpc("refresh_rollups");
+  if (refreshErr) console.warn("  refresh_rollups failed:", refreshErr.message);
+  else console.log("  Rollups refreshed.");
+
   console.log("\n✅ Import complete!");
 }
 
