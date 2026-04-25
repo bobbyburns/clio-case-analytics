@@ -1,10 +1,9 @@
 import { createClient } from "@/lib/supabase/server"
-import { parseFilters, fetchMatters, fetchActivitiesForMatters } from "@/lib/queries"
+import { parseFilters, fetchMatters, fetchMatterRollup, type MatterRollup } from "@/lib/queries"
 import { ClientsInteractive } from "@/components/ClientsInteractive"
 import { AIChatAssistant } from "@/components/AIChatAssistant"
 import { parseClientsField } from "@/lib/utils/clients"
 import { formatCurrency } from "@/lib/utils/format"
-import type { Activity } from "@/lib/types"
 
 export const maxDuration = 60
 export const revalidate = 300
@@ -79,13 +78,15 @@ export default async function ClientsPage({
   const initialTypes = typesParam ? typesParam.split(",").filter(Boolean) : []
 
   let matters: Awaited<ReturnType<typeof fetchMatters>>
-  let activities: Activity[]
+  let rollupByMatter: Map<string, MatterRollup>
   try {
-    matters = await fetchMatters(supabase, filters)
-    activities = await fetchActivitiesForMatters(
-      supabase,
-      matters.map((m) => m.unique_id),
-      { dateFrom: filters.dateFrom, dateTo: filters.dateTo },
+    const t0 = Date.now()
+    ;[matters, rollupByMatter] = await Promise.all([
+      fetchMatters(supabase, filters),
+      fetchMatterRollup(supabase, filters),
+    ])
+    console.log(
+      `[clients] ${matters.length} matters / ${rollupByMatter.size} rollups in ${Date.now() - t0}ms`,
     )
   } catch (err) {
     const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
@@ -102,35 +103,7 @@ export default async function ClientsPage({
     )
   }
 
-  // Per-matter activity metadata: dates + flat-rate share + legacy-migration detection
-  interface MatterActStats {
-    dates: string[]
-    totalBillable: number
-    flatRateBillable: number
-    legacyBillable: number // Xero 2016-11-06 balance-forwards
-  }
-  const actStatsByMatter = new Map<string, MatterActStats>()
-  for (const a of activities) {
-    if (!a.matter_unique_id) continue
-    const key = String(a.matter_unique_id)
-    let s = actStatsByMatter.get(key)
-    if (!s) {
-      s = { dates: [], totalBillable: 0, flatRateBillable: 0, legacyBillable: 0 }
-      actStatsByMatter.set(key, s)
-    }
-    if (a.activity_date) s.dates.push(a.activity_date)
-    const amt = a.billable_amount ?? 0
-    s.totalBillable += amt
-    if (a.flat_rate) s.flatRateBillable += amt
-    if (
-      a.activity_date === "2016-11-06" &&
-      (a.description || "").toLowerCase().includes("xero")
-    ) {
-      s.legacyBillable += amt
-    }
-  }
-
-  // Aggregate per client, keeping the per-matter structure so the UI can drill in.
+  // Aggregate per client from server-side rollup (one row per matter).
   const byClient = new Map<
     string,
     {
@@ -138,10 +111,12 @@ export default async function ClientsPage({
       isJoint: boolean
       totalBillable: number
       matterCount: number
-      allActivityDates: string[]
+      firstActivityDate: string | null
+      lastActivityDate: string | null
       allMatterOpenDates: string[]
       flatRateBillable: number
       legacyBillable: number
+      totalActivityCount: number
       matters: ClientMatter[]
     }
   >()
@@ -149,11 +124,12 @@ export default async function ClientsPage({
   for (const m of matters) {
     const parsed = parseClientsField(m.clients)
     const billable = m.total_billable ?? 0
-    const stats = actStatsByMatter.get(m.unique_id)
-    const dates = stats?.dates ?? []
-    const sortedDates = [...dates].sort()
-    const firstDate = sortedDates[0] ?? null
-    const lastDate = sortedDates[sortedDates.length - 1] ?? null
+    const r = rollupByMatter.get(m.unique_id)
+    const firstDate = r?.first_activity_date ?? null
+    const lastDate = r?.last_activity_date ?? null
+    const flatRateBillable = r?.flat_rate_billable ?? 0
+    const legacyBillable = r?.legacy_billable ?? 0
+    const activityCount = Number(r?.activity_count ?? 0)
 
     const clientMatter: ClientMatter = {
       unique_id: m.unique_id,
@@ -166,18 +142,24 @@ export default async function ClientsPage({
       close_date: m.close_date,
       firstActivityDate: firstDate,
       lastActivityDate: lastDate,
-      hasFlatRateActivity: (stats?.flatRateBillable ?? 0) > 0,
-      hasLegacyMigration: (stats?.legacyBillable ?? 0) > 0,
+      hasFlatRateActivity: flatRateBillable > 0,
+      hasLegacyMigration: legacyBillable > 0,
     }
 
     const existing = byClient.get(parsed.key)
     if (existing) {
       existing.totalBillable += billable
       existing.matterCount += 1
-      existing.allActivityDates.push(...dates)
+      if (firstDate && (!existing.firstActivityDate || firstDate < existing.firstActivityDate)) {
+        existing.firstActivityDate = firstDate
+      }
+      if (lastDate && (!existing.lastActivityDate || lastDate > existing.lastActivityDate)) {
+        existing.lastActivityDate = lastDate
+      }
       if (m.open_date) existing.allMatterOpenDates.push(m.open_date)
-      existing.flatRateBillable += stats?.flatRateBillable ?? 0
-      existing.legacyBillable += stats?.legacyBillable ?? 0
+      existing.flatRateBillable += flatRateBillable
+      existing.legacyBillable += legacyBillable
+      existing.totalActivityCount += activityCount
       existing.matters.push(clientMatter)
     } else {
       byClient.set(parsed.key, {
@@ -185,10 +167,12 @@ export default async function ClientsPage({
         isJoint: parsed.isJoint,
         totalBillable: billable,
         matterCount: 1,
-        allActivityDates: [...dates],
+        firstActivityDate: firstDate,
+        lastActivityDate: lastDate,
         allMatterOpenDates: m.open_date ? [m.open_date] : [],
-        flatRateBillable: stats?.flatRateBillable ?? 0,
-        legacyBillable: stats?.legacyBillable ?? 0,
+        flatRateBillable,
+        legacyBillable,
+        totalActivityCount: activityCount,
         matters: [clientMatter],
       })
     }
@@ -196,14 +180,11 @@ export default async function ClientsPage({
 
   const rows: ClientRow[] = []
   for (const [clientKey, v] of byClient.entries()) {
-    let firstDate: string | null = null
-    let lastDate: string | null = null
+    const firstDate = v.firstActivityDate
+    const lastDate = v.lastActivityDate
     let monthsActive = 0
     let spanDays = 0
-    if (v.allActivityDates.length > 0) {
-      const sorted = [...v.allActivityDates].sort()
-      firstDate = sorted[0]
-      lastDate = sorted[sorted.length - 1]
+    if (firstDate && lastDate) {
       spanDays =
         (new Date(lastDate).getTime() - new Date(firstDate).getTime()) / (1000 * 60 * 60 * 24)
       monthsActive = Math.max(0, spanDays / DAYS_PER_MONTH)
@@ -223,10 +204,7 @@ export default async function ClientsPage({
     // - single-activity: exactly 1 activity across all matters
     // - short-burst: span 2–29 days with multiple activities (OP/DV/quick-turn)
     // - ongoing: everything else (span ≥ 30 days OR fallback)
-    const totalActivityCount = v.matters.reduce(
-      (s, m) => s + (m.activity_count ?? 0),
-      0,
-    )
+    const totalActivityCount = v.totalActivityCount
     let engagementType: EngagementType
     const hasRevenue = v.totalBillable > 0
     const legacyShare = hasRevenue ? v.legacyBillable / v.totalBillable : 0

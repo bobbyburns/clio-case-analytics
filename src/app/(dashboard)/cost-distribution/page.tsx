@@ -5,6 +5,9 @@ import { formatCurrency, formatNumber } from "@/lib/utils/format"
 import { CostDistributionInteractive } from "@/components/CostDistributionInteractive"
 import { AIChatAssistant } from "@/components/AIChatAssistant"
 
+export const maxDuration = 60
+export const revalidate = 300
+
 export default async function CostDistributionPage({
   searchParams,
 }: {
@@ -13,7 +16,9 @@ export default async function CostDistributionPage({
   const params = await searchParams
   const supabase = await createClient()
   const filters = parseFilters(params)
+  const t0 = Date.now()
   const matters = await fetchMatters(supabase, filters, true)
+  console.log(`[cost-distribution] fetched ${matters.length} matters in ${Date.now() - t0}ms`)
 
   const activeMatters = matters.filter((m) => !m.disregarded)
   const billableAmounts = activeMatters

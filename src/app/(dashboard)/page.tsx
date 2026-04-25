@@ -7,6 +7,9 @@ import { histogram } from "@/lib/utils/stats"
 import { formatCurrency, formatNumber } from "@/lib/utils/format"
 import { AIChatAssistant } from "@/components/AIChatAssistant"
 
+export const maxDuration = 60
+export const revalidate = 300
+
 export default async function OverviewPage({
   searchParams,
 }: {
@@ -15,7 +18,9 @@ export default async function OverviewPage({
   const params = await searchParams
   const supabase = await createClient()
   const filters = parseFilters(params)
+  const t0 = Date.now()
   const matters = await fetchMatters(supabase, filters)
+  console.log(`[overview] fetched ${matters.length} matters in ${Date.now() - t0}ms`)
 
   const totalMatters = matters.length
   const closedMatters = matters.filter((m) => m.status === "Closed")

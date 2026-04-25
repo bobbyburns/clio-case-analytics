@@ -9,6 +9,9 @@ import {
 } from "@/components/charts/TrendsCharts"
 import { AIChatAssistant } from "@/components/AIChatAssistant"
 
+export const maxDuration = 60
+export const revalidate = 300
+
 function toQuarter(dateStr: string): string {
   const d = new Date(dateStr)
   const q = Math.ceil((d.getMonth() + 1) / 3)
@@ -23,7 +26,9 @@ export default async function TrendsPage({
   const params = await searchParams
   const supabase = await createClient()
   const filters = parseFilters(params)
+  const t0 = Date.now()
   const matters = await fetchMatters(supabase, filters)
+  console.log(`[trends] fetched ${matters.length} matters in ${Date.now() - t0}ms`)
 
   // Cases per quarter
   const openedMap = new Map<string, number>()

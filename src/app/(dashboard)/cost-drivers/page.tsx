@@ -12,6 +12,9 @@ import {
 } from "@/components/charts/CostDriversCharts"
 import { AIChatAssistant } from "@/components/AIChatAssistant"
 
+export const maxDuration = 60
+export const revalidate = 300
+
 function groupByMedianCost(
   matters: { key: string; cost: number }[]
 ): { name: string; medianCost: number; count: number }[] {
@@ -37,7 +40,9 @@ export default async function CostDriversPage({
   const params = await searchParams
   const supabase = await createClient()
   const filters = parseFilters(params)
+  const t0 = Date.now()
   const matters = await fetchMatters(supabase, filters)
+  console.log(`[cost-drivers] fetched ${matters.length} matters in ${Date.now() - t0}ms`)
 
   const withCost = matters.filter((m) => (m.total_billable ?? 0) > 0)
 

@@ -1,18 +1,23 @@
 import { createClient } from "@/lib/supabase/server"
-import { parseFilters, fetchMatters, fetchActivitiesForMatters } from "@/lib/queries"
+import {
+  parseFilters,
+  fetchMatters,
+  fetchMatterRollup,
+  fetchMonthlyFirmRevenue,
+  fetchMatterMonthlyBillable,
+  type MatterMonthlyBillable,
+} from "@/lib/queries"
 import { PricingModelInteractive } from "@/components/PricingModelInteractive"
 import { AIChatAssistant } from "@/components/AIChatAssistant"
 import {
-  buildScenarioMatters,
+  buildScenarioMattersFromRollup,
   computeBreakEvenPerMatter,
-  monthlyFirmRevenue,
   revenuePredictability,
   runScenario,
   type ScenarioMatter,
 } from "@/lib/utils/pricing"
 import { parseClientsField } from "@/lib/utils/clients"
 import { formatCurrency } from "@/lib/utils/format"
-import type { Activity } from "@/lib/types"
 
 const DEFAULT_RETAINER = 1500
 const TOP_CLIENTS_COUNT = 10
@@ -35,18 +40,18 @@ export default async function PricingModelPage({
 
   const t0 = Date.now()
   let matters: Awaited<ReturnType<typeof fetchMatters>>
-  let activities: Activity[]
+  let rollupByMatter: Awaited<ReturnType<typeof fetchMatterRollup>>
+  let monthlyHourly: Awaited<ReturnType<typeof fetchMonthlyFirmRevenue>>
+  let matterMonthly: MatterMonthlyBillable[]
   try {
-    matters = await fetchMatters(supabase, filters)
-    console.log(`[pricing-model] fetched ${matters.length} matters in ${Date.now() - t0}ms`)
-    const t1 = Date.now()
-    activities = await fetchActivitiesForMatters(
-      supabase,
-      matters.map((m) => m.unique_id),
-      { dateFrom: filters.dateFrom, dateTo: filters.dateTo },
-    )
+    ;[matters, rollupByMatter, monthlyHourly, matterMonthly] = await Promise.all([
+      fetchMatters(supabase, filters),
+      fetchMatterRollup(supabase, filters),
+      fetchMonthlyFirmRevenue(supabase, filters, true),
+      fetchMatterMonthlyBillable(supabase, filters, true),
+    ])
     console.log(
-      `[pricing-model] fetched ${activities.length} activities in ${Date.now() - t1}ms`,
+      `[pricing-model] ${matters.length} matters / ${rollupByMatter.size} rollups / ${monthlyHourly.size} months / ${matterMonthly.length} matter-months in ${Date.now() - t0}ms`,
     )
   } catch (err) {
     const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
@@ -67,7 +72,7 @@ export default async function PricingModelPage({
     )
   }
 
-  const allScenarioMatters = buildScenarioMatters(matters, activities)
+  const allScenarioMatters = buildScenarioMattersFromRollup(matters, rollupByMatter)
 
   // Scope = hourly matters only (exclude existing flat-fee per plan)
   const hourlyMatters = allScenarioMatters.filter(
@@ -84,14 +89,12 @@ export default async function PricingModelPage({
         100
       : 0
 
-  // Monthly firm revenue (hourly) from activities, for predictability calculation
-  const monthlyHourly = monthlyFirmRevenue(activities.filter((a) => !a.flat_rate))
   const monthlyHourlyEntries: Array<[string, number]> = Array.from(monthlyHourly.entries())
 
-  // Top-N clients stacked area: group activities by (clientKey, YYYY-MM)
+  // Top-N clients stacked area: group matter-month rollups by (clientKey, YYYY-MM)
   const { monthlyTopClientsData, topClientKeys } = buildTopClientMonthlyData(
     hourlyMatters,
-    activities,
+    matterMonthly,
   )
 
   // AI context — server-computed summary at the URL-default retainer
@@ -223,19 +226,17 @@ function buildClientLeaderboard(matters: ScenarioMatter[]): ClientRollup[] {
 
 function buildTopClientMonthlyData(
   matters: ScenarioMatter[],
-  activities: import("@/lib/types").Activity[],
+  matterMonthly: MatterMonthlyBillable[],
 ): {
   monthlyTopClientsData: Array<Record<string, string | number>>
   topClientKeys: string[]
 } {
-  // Map matter unique_id -> client display (for top-N labeling)
   const matterToDisplay = new Map<string, { key: string; display: string }>()
   for (const m of matters) {
     const parsed = parseClientsField(m.clients)
     matterToDisplay.set(m.unique_id, { key: parsed.key, display: parsed.display })
   }
 
-  // Identify top-N clients by total revenue
   const revenueByClientKey = new Map<string, { display: string; total: number }>()
   for (const m of matters) {
     const info = matterToDisplay.get(m.unique_id)!
@@ -251,18 +252,14 @@ function buildTopClientMonthlyData(
     topClients.map(([key, v]) => [key, v.display]),
   )
 
-  // Aggregate activities: (YYYY-MM, clientDisplay-or-"Other") -> sum
   const monthly = new Map<string, Map<string, number>>()
-  for (const a of activities) {
-    if (!a.activity_date || (a.billable_amount ?? 0) <= 0 || a.flat_rate) continue
-    const mid = String(a.matter_unique_id ?? "")
-    const info = matterToDisplay.get(mid)
-    if (!info) continue // activity on a flat-fee or out-of-scope matter
+  for (const row of matterMonthly) {
+    const info = matterToDisplay.get(row.matter_unique_id)
+    if (!info) continue
     const column = topClientKeySet.has(info.key) ? keyToDisplay.get(info.key)! : "Other"
-    const ym = a.activity_date.slice(0, 7)
-    if (!monthly.has(ym)) monthly.set(ym, new Map())
-    const inner = monthly.get(ym)!
-    inner.set(column, (inner.get(column) ?? 0) + (a.billable_amount ?? 0))
+    if (!monthly.has(row.month)) monthly.set(row.month, new Map())
+    const inner = monthly.get(row.month)!
+    inner.set(column, (inner.get(column) ?? 0) + row.billable)
   }
 
   const months = Array.from(monthly.keys()).sort()

@@ -6,6 +6,9 @@ import { DurationHistogram, DurationVsCostScatter } from "@/components/charts/Du
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { AIChatAssistant } from "@/components/AIChatAssistant"
 
+export const maxDuration = 60
+export const revalidate = 300
+
 function linearRegression(points: { x: number; y: number }[]) {
   if (points.length < 2) return { slope: 0, intercept: 0 }
   const n = points.length
@@ -28,7 +31,9 @@ export default async function DurationPage({
   const params = await searchParams
   const supabase = await createClient()
   const filters = parseFilters(params)
+  const t0 = Date.now()
   const matters = await fetchMatters(supabase, filters)
+  console.log(`[duration] fetched ${matters.length} matters in ${Date.now() - t0}ms`)
 
   const closedMatters = matters.filter(
     (m) => m.status === "Closed" && m.duration_days != null && m.duration_days > 0

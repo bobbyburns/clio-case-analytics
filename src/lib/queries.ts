@@ -20,8 +20,10 @@ export function parseFilters(searchParams: Record<string, string | string[] | un
   }
 }
 
+const MATTER_COLUMNS = "id,unique_id,display_number,status,open_date,close_date,duration_days,county,case_type,number_of_children,responsible_attorney,has_opposing_counsel,retainer_type,clients,total_billable,total_hours,activity_count,disregarded,mapped_category"
+
 function buildMatterQuery(supabase: SupabaseClient, filters: FilterState, includeDisregarded = false) {
-  let q = supabase.from("clio_matters").select("*")
+  let q = supabase.from("clio_matters").select(MATTER_COLUMNS)
   if (!includeDisregarded) q = q.or("disregarded.is.null,disregarded.eq.false")
   if (filters.status.length > 0) q = q.in("status", filters.status)
   if (filters.caseType.length > 0) {
@@ -50,7 +52,7 @@ export async function fetchMatters(
   includeDisregarded = false,
 ): Promise<Matter[]> {
   const all: Matter[] = []
-  const PAGE = 1000
+  const PAGE = 2000
   let offset = 0
   while (true) {
     const { data, error } = await buildMatterQuery(supabase, filters, includeDisregarded)
@@ -58,7 +60,7 @@ export async function fetchMatters(
       .range(offset, offset + PAGE - 1)
     if (error) throw error
     if (!data || data.length === 0) break
-    all.push(...(data as Matter[]))
+    all.push(...(data as unknown as Matter[]))
     if (data.length < PAGE) break
     offset += PAGE
   }
@@ -83,10 +85,11 @@ export async function fetchActivities(
   }
 
   const all: Activity[] = []
-  const PAGE = 1000
+  const PAGE = 2000
   let offset = 0
+  const ACTIVITY_COLUMNS = "matter_unique_id,activity_date,billable_amount,nonbillable_amount,flat_rate,hours,rate,type,user_name,bill_state"
   while (true) {
-    let q = supabase.from("clio_activities").select("*")
+    let q = supabase.from("clio_activities").select(ACTIVITY_COLUMNS)
     if (matterIds) q = q.in("matter_unique_id", matterIds)
     if (filters.dateFrom) q = q.gte("activity_date", filters.dateFrom)
     if (filters.dateTo) q = q.lte("activity_date", filters.dateTo)
@@ -95,7 +98,7 @@ export async function fetchActivities(
       .range(offset, offset + PAGE - 1)
     if (error) throw error
     if (!data || data.length === 0) break
-    all.push(...(data as Activity[]))
+    all.push(...(data as unknown as Activity[]))
     if (data.length < PAGE) break
     offset += PAGE
   }
@@ -123,8 +126,8 @@ export async function fetchActivitiesForMatters(
     concurrency = 8,
   } = options
 
-  const ID_CHUNK = 100
-  const PAGE = 1000
+  const ID_CHUNK = 300
+  const PAGE = 2000
   const chunks: string[][] = []
   for (let i = 0; i < matterIds.length; i += ID_CHUNK) {
     chunks.push(matterIds.slice(i, i + ID_CHUNK))
@@ -158,9 +161,131 @@ export async function fetchActivitiesForMatters(
   return all
 }
 
+export interface MatterRollup {
+  matter_unique_id: string
+  total_billable: number
+  total_nonbillable: number
+  total_hours: number
+  flat_rate_billable: number
+  hourly_billable: number
+  legacy_billable: number
+  activity_count: number
+  first_activity_date: string | null
+  last_activity_date: string | null
+}
+
+/** One-shot per-matter rollup — replaces fetchActivitiesForMatters() in the
+ *  Pricing Model and Clients pages. Server-side aggregation drops the wire size
+ *  from ~70k activity rows to ~2k matter rows. */
+export async function fetchMatterRollup(
+  supabase: SupabaseClient,
+  filters: Pick<FilterState, "dateFrom" | "dateTo">,
+): Promise<Map<string, MatterRollup>> {
+  const { data, error } = await supabase.rpc("matter_activity_rollup", {
+    date_from: filters.dateFrom,
+    date_to: filters.dateTo,
+  })
+  if (error) throw error
+  const map = new Map<string, MatterRollup>()
+  for (const row of (data as MatterRollup[]) ?? []) {
+    map.set(row.matter_unique_id, row)
+  }
+  return map
+}
+
+export async function fetchMonthlyFirmRevenue(
+  supabase: SupabaseClient,
+  filters: Pick<FilterState, "dateFrom" | "dateTo">,
+  hourlyOnly = false,
+): Promise<Map<string, number>> {
+  const { data, error } = await supabase.rpc("monthly_firm_revenue", {
+    date_from: filters.dateFrom,
+    date_to: filters.dateTo,
+    hourly_only: hourlyOnly,
+  })
+  if (error) throw error
+  const map = new Map<string, number>()
+  for (const row of (data as Array<{ month: string; billable: number }>) ?? []) {
+    map.set(row.month, Number(row.billable))
+  }
+  return map
+}
+
+export interface MatterMonthlyBillable {
+  matter_unique_id: string
+  month: string
+  billable: number
+}
+
+export async function fetchMatterMonthlyBillable(
+  supabase: SupabaseClient,
+  filters: Pick<FilterState, "dateFrom" | "dateTo">,
+  hourlyOnly = false,
+): Promise<MatterMonthlyBillable[]> {
+  const { data, error } = await supabase.rpc("matter_monthly_billable", {
+    date_from: filters.dateFrom,
+    date_to: filters.dateTo,
+    hourly_only: hourlyOnly,
+  })
+  if (error) throw error
+  return ((data as MatterMonthlyBillable[]) ?? []).map((r) => ({
+    matter_unique_id: r.matter_unique_id,
+    month: r.month,
+    billable: Number(r.billable),
+  }))
+}
+
+export interface ActivityPatternsRollup {
+  total_entries: number
+  time_entries: number
+  expense_entries: number
+  billable_hours: number
+  nonbillable_hours: number
+  flat_rate_count: number
+  hourly_count: number
+  total_billable_amount: number
+  top_users: Array<{ user_name: string; amount: number }>
+}
+
+export async function fetchActivityPatternsRollup(
+  supabase: SupabaseClient,
+  filters: FilterState,
+): Promise<ActivityPatternsRollup> {
+  let matterIds: string[] | null = null
+  if (
+    filters.status.length > 0 ||
+    filters.caseType.length > 0 ||
+    filters.county.length > 0 ||
+    filters.attorney.length > 0
+  ) {
+    const matters = await fetchMatters(supabase, filters)
+    matterIds = matters.map((m) => m.unique_id)
+    if (matterIds.length === 0) {
+      return {
+        total_entries: 0,
+        time_entries: 0,
+        expense_entries: 0,
+        billable_hours: 0,
+        nonbillable_hours: 0,
+        flat_rate_count: 0,
+        hourly_count: 0,
+        total_billable_amount: 0,
+        top_users: [],
+      }
+    }
+  }
+  const { data, error } = await supabase.rpc("activity_patterns_rollup", {
+    date_from: filters.dateFrom,
+    date_to: filters.dateTo,
+    matter_ids: matterIds,
+  })
+  if (error) throw error
+  return data as ActivityPatternsRollup
+}
+
 export async function fetchFilterOptions(supabase: SupabaseClient) {
   const allMatters: Array<{ status: string; case_type: string; county: string; responsible_attorney: string; mapped_category: string | null }> = []
-  const PAGE = 1000
+  const PAGE = 2000
   let offset = 0
   while (true) {
     const { data } = await supabase

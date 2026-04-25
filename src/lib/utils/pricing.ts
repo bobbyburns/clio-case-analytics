@@ -83,6 +83,60 @@ export function computeActiveMonths(
   return { activeMonths, rawMonths, firstDate, lastDate }
 }
 
+export interface MatterRollupInput {
+  total_billable: number
+  flat_rate_billable: number
+  first_activity_date: string | null
+  last_activity_date: string | null
+}
+
+/** Build scenario inputs from server-aggregated rollup. Skips per-activity loop. */
+export function buildScenarioMattersFromRollup(
+  matters: Matter[],
+  rollupByMatter: Map<string, MatterRollupInput>,
+): ScenarioMatter[] {
+  return matters.map((m) => {
+    const r = rollupByMatter.get(m.unique_id)
+    const firstDate = r?.first_activity_date ?? null
+    const lastDate = r?.last_activity_date ?? null
+    let rawMonths: number
+    if (firstDate && lastDate) {
+      rawMonths =
+        (new Date(lastDate).getTime() - new Date(firstDate).getTime()) /
+        (1000 * 60 * 60 * 24 * DAYS_PER_MONTH)
+    } else if (m.duration_days != null) {
+      rawMonths = m.duration_days / DAYS_PER_MONTH
+    } else if (m.open_date) {
+      const end = m.close_date ? new Date(m.close_date) : new Date()
+      const spanDays =
+        (end.getTime() - new Date(m.open_date).getTime()) / (1000 * 60 * 60 * 24)
+      rawMonths = Math.max(0, spanDays / DAYS_PER_MONTH)
+    } else {
+      rawMonths = 0
+    }
+    const activeMonths = Math.max(1, Math.ceil(rawMonths))
+    const hasFlatRateActivity = (r?.flat_rate_billable ?? 0) > 0
+    return {
+      unique_id: m.unique_id,
+      display_number: m.display_number,
+      clients: m.clients,
+      status: m.status,
+      mapped_category: m.mapped_category,
+      case_type: m.case_type,
+      responsible_attorney: m.responsible_attorney,
+      open_date: m.open_date,
+      close_date: m.close_date,
+      totalBillable: m.total_billable ?? 0,
+      activeMonths,
+      activeMonthsRaw: rawMonths,
+      firstActivityDate: firstDate,
+      lastActivityDate: lastDate,
+      isExistingFlatFee: isExistingFlatFee(m, hasFlatRateActivity),
+      hasFlatRateActivity,
+    }
+  })
+}
+
 /** Build per-matter scenario inputs. Groups activities by matter_unique_id once. */
 export function buildScenarioMatters(
   matters: Matter[],
