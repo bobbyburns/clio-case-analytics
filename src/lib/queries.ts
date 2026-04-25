@@ -263,6 +263,64 @@ export async function fetchMatterMonthlyBillable(
   }))
 }
 
+export interface MatterWeeklyBillable {
+  matter_unique_id: string
+  week_start: string
+  billable: number
+  hours: number
+  activity_count: number
+}
+
+export async function fetchMatterWeeklyBillable(
+  supabase: SupabaseClient,
+  filters: Pick<FilterState, "dateFrom" | "dateTo">,
+): Promise<MatterWeeklyBillable[]> {
+  const rows = await pagedRpc<MatterWeeklyBillable>(
+    supabase,
+    "matter_weekly_billable",
+    {
+      date_from: filters.dateFrom,
+      date_to: filters.dateTo,
+    },
+  )
+  return rows.map((r) => ({
+    matter_unique_id: r.matter_unique_id,
+    week_start: r.week_start,
+    billable: Number(r.billable),
+    hours: Number(r.hours),
+    activity_count: Number(r.activity_count),
+  }))
+}
+
+export interface SpikeActivityRow {
+  activity_date: string | null
+  type: string
+  user_name: string | null
+  description: string | null
+  hours: number
+  rate: number
+  billable_amount: number
+  expense_category: string | null
+}
+
+export async function fetchSpikeActivities(
+  supabase: SupabaseClient,
+  matterId: string,
+  weekStart: string,
+): Promise<SpikeActivityRow[]> {
+  const { data, error } = await supabase.rpc("spike_activities", {
+    p_matter_id: matterId,
+    p_week_start: weekStart,
+  })
+  if (error) throw error
+  return ((data as SpikeActivityRow[]) ?? []).map((r) => ({
+    ...r,
+    hours: Number(r.hours),
+    rate: Number(r.rate),
+    billable_amount: Number(r.billable_amount),
+  }))
+}
+
 export interface ActivityPatternsRollup {
   total_entries: number
   time_entries: number

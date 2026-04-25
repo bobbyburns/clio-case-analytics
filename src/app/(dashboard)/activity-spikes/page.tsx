@@ -1,0 +1,186 @@
+import { createClient } from "@/lib/supabase/server"
+import {
+  parseFilters,
+  fetchMatters,
+  fetchMatterWeeklyBillable,
+} from "@/lib/queries"
+import {
+  computeMatterBaselines,
+  detectSpikes,
+  aggregateFirmWeekly,
+  currentIsoWeekStart,
+  type Spike,
+} from "@/lib/spikes"
+import { ActivitySpikesInteractive } from "@/components/ActivitySpikesInteractive"
+import { AIChatAssistant } from "@/components/AIChatAssistant"
+import { parseClientsField } from "@/lib/utils/clients"
+import { formatCurrency, formatNumber } from "@/lib/utils/format"
+import type { Matter } from "@/lib/types"
+
+export const maxDuration = 60
+export const revalidate = 300
+
+const DEFAULT_RATIO = 2.5
+const DEFAULT_FLOOR = 250
+
+export default async function ActivitySpikesPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
+  const params = await searchParams
+  const supabase = await createClient()
+  const filters = parseFilters(params)
+
+  const ratioParam =
+    typeof params.ratio === "string" ? Number(params.ratio) : NaN
+  const ratioThreshold =
+    Number.isFinite(ratioParam) && ratioParam >= 1 && ratioParam <= 10
+      ? ratioParam
+      : DEFAULT_RATIO
+
+  const floorParam =
+    typeof params.floor === "string" ? Number(params.floor) : NaN
+  const absoluteFloor =
+    Number.isFinite(floorParam) && floorParam >= 0 ? Math.min(50000, floorParam) : DEFAULT_FLOOR
+
+  const t0 = Date.now()
+  let matters: Matter[]
+  let weeks: Awaited<ReturnType<typeof fetchMatterWeeklyBillable>>
+  try {
+    ;[matters, weeks] = await Promise.all([
+      fetchMatters(supabase, filters),
+      fetchMatterWeeklyBillable(supabase, filters),
+    ])
+    console.log(
+      `[activity-spikes] ${matters.length} matters / ${weeks.length} matter-weeks in ${Date.now() - t0}ms`,
+    )
+  } catch (err) {
+    const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Activity Spikes</h1>
+        </div>
+        <div className="rounded-lg border border-rose-200 bg-rose-50 p-6">
+          <h2 className="font-semibold text-rose-800">Data load failed</h2>
+          <p className="mt-2 text-sm text-rose-700 font-mono whitespace-pre-wrap">{msg}</p>
+        </div>
+      </div>
+    )
+  }
+
+  const matterById = new Map(matters.map((m) => [m.unique_id, m]))
+  const inScopeMatterIds = new Set(matters.map((m) => m.unique_id))
+  const inScopeWeeks = weeks.filter((w) => inScopeMatterIds.has(w.matter_unique_id))
+
+  const baselines = computeMatterBaselines(inScopeWeeks)
+  const excludeWeekStart = currentIsoWeekStart()
+  const spikes = detectSpikes(inScopeWeeks, baselines, {
+    ratioThreshold,
+    absoluteFloor,
+    excludeWeekStart,
+  })
+
+  // Decorate spikes with matter/client display for the table.
+  const spikeRows = spikes.map((s) => {
+    const m = matterById.get(s.matter_unique_id)
+    const client = m ? parseClientsField(m.clients) : { display: "—", isJoint: false }
+    return {
+      ...s,
+      display_number: m?.display_number ?? s.matter_unique_id,
+      client_display: client.display,
+      mapped_category: m?.mapped_category ?? null,
+    }
+  })
+
+  // Firm-wide weekly aggregation (using the unfiltered matter-week rollup so the
+  // chart shows firm-wide trends, not just the case-type filter scope).
+  const firmWeekly = aggregateFirmWeekly(inScopeWeeks).filter(
+    (w) => w.week < excludeWeekStart,
+  )
+  const spikeWeekSet = new Set(spikes.map((s) => s.week_start))
+
+  // KPIs
+  const totalFirmBillable = inScopeWeeks
+    .filter((w) => w.week_start < excludeWeekStart)
+    .reduce((s, w) => s + w.billable, 0)
+  const totalSpikeBillable = spikes.reduce((s, sp) => s + sp.billable, 0)
+  const sparseCount = spikes.filter((s) => s.rule === "absolute").length
+  const ratioCount = spikes.filter((s) => s.rule === "ratio").length
+  const ratiosArr = spikes.filter((s) => s.rule === "ratio").map((s) => s.ratio)
+  const medianRatio =
+    ratiosArr.length > 0
+      ? [...ratiosArr].sort((a, b) => a - b)[Math.floor(ratiosArr.length / 2)]
+      : 0
+  const mattersWithSpike = new Set(spikes.map((s) => s.matter_unique_id)).size
+
+  // Top-spike summary for AI page context.
+  const topSpikesSummary = spikeRows.slice(0, 20).map((s) => ({
+    matter: s.display_number,
+    client: s.client_display,
+    week: s.week_start,
+    billable: s.billable,
+    ratio: s.ratio,
+  }))
+
+  const pageContext = `Page: Activity Spikes
+Detection rules: ratio ≥ ${ratioThreshold}× matter median weekly billable, absolute floor $${absoluteFloor}.
+Sparse-baseline matters (<8 weeks of data) use the absolute floor only.
+
+Firm scope: ${formatNumber(matters.length)} matters, ${formatNumber(inScopeWeeks.length)} matter-weeks of activity.
+Total in-scope billable: ${formatCurrency(totalFirmBillable)}.
+
+Spikes detected: ${formatNumber(spikes.length)} total (${formatNumber(ratioCount)} ratio-based, ${formatNumber(sparseCount)} absolute-only).
+Spike billable: ${formatCurrency(totalSpikeBillable)} = ${totalFirmBillable > 0 ? ((totalSpikeBillable / totalFirmBillable) * 100).toFixed(1) : "0"}% of firm billable.
+Matters with at least one spike: ${formatNumber(mattersWithSpike)} of ${formatNumber(matters.length)}.
+Median spike ratio: ${medianRatio.toFixed(2)}×.
+
+Top 20 spikes by billable amount:
+${topSpikesSummary
+    .map(
+      (s) =>
+        `- ${s.matter} (${s.client}) — week of ${s.week} — ${formatCurrency(s.billable)} (${s.ratio.toFixed(1)}× baseline)`,
+    )
+    .join("\n")}
+
+Trigger keywords are computed client-side from the description field across all spike-week activities, displayed in the leaderboard at the bottom of the page.`
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">Activity Spikes</h1>
+        <p className="text-muted-foreground text-sm mt-1">
+          Identify matter-weeks where billable activity exceeds baseline. Use the trigger
+          keywords to spot common drivers (hearings, depositions, motions) for surcharge planning.
+        </p>
+      </div>
+
+      <ActivitySpikesInteractive
+        spikes={spikeRows}
+        firmWeekly={firmWeekly}
+        spikeWeekSet={Array.from(spikeWeekSet)}
+        initialRatio={ratioThreshold}
+        initialFloor={absoluteFloor}
+        kpis={{
+          spikeCount: spikes.length,
+          totalFirmBillable,
+          totalSpikeBillable,
+          mattersWithSpike,
+          totalMatters: matters.length,
+          medianRatio,
+          sparseCount,
+          ratioCount,
+        }}
+      />
+
+      <AIChatAssistant pageContext={pageContext} />
+    </div>
+  )
+}
+
+export type SpikeRow = Spike & {
+  display_number: string
+  client_display: string
+  mapped_category: string | null
+}
