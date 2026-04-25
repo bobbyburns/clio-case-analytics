@@ -67,6 +67,8 @@ interface ScenarioRow extends ClientRow {
 interface Props {
   rows: ClientRow[]
   initialRetainer: number
+  initialDownpayment: number
+  initialMinMonths: number
   initialFirstFrom: string
   initialFirstTo: string
   initialOpenFrom: string
@@ -77,6 +79,8 @@ interface Props {
 export function ClientsInteractive({
   rows,
   initialRetainer,
+  initialDownpayment,
+  initialMinMonths,
   initialFirstFrom,
   initialFirstTo,
   initialOpenFrom,
@@ -89,6 +93,10 @@ export function ClientsInteractive({
 
   const [retainer, setRetainer] = useState(initialRetainer)
   const [retainerInput, setRetainerInput] = useState(String(initialRetainer))
+  const [downpayment, setDownpayment] = useState(initialDownpayment)
+  const [downpaymentInput, setDownpaymentInput] = useState(String(initialDownpayment))
+  const [minMonths, setMinMonths] = useState(initialMinMonths)
+  const [minMonthsInput, setMinMonthsInput] = useState(String(initialMinMonths))
   const [firstFrom, setFirstFrom] = useState(initialFirstFrom)
   const [firstTo, setFirstTo] = useState(initialFirstTo)
   const [openFrom, setOpenFrom] = useState(initialOpenFrom)
@@ -147,6 +155,26 @@ export function ClientsInteractive({
       const params = new URLSearchParams(searchParams.toString())
       if (value !== 1500) params.set("retainer", String(value))
       else params.delete("retainer")
+      router.replace(`${pathname}?${params.toString()}`)
+    },
+    [router, pathname, searchParams],
+  )
+
+  const syncDownpaymentToUrl = useCallback(
+    (value: number) => {
+      const params = new URLSearchParams(searchParams.toString())
+      if (value > 0) params.set("downpayment", String(value))
+      else params.delete("downpayment")
+      router.replace(`${pathname}?${params.toString()}`)
+    },
+    [router, pathname, searchParams],
+  )
+
+  const syncMinMonthsToUrl = useCallback(
+    (value: number) => {
+      const params = new URLSearchParams(searchParams.toString())
+      if (value > 0) params.set("minMonths", String(value))
+      else params.delete("minMonths")
       router.replace(`${pathname}?${params.toString()}`)
     },
     [router, pathname, searchParams],
@@ -221,13 +249,16 @@ export function ClientsInteractive({
     if (typeFilter.size > 0) {
       list = list.filter((r) => typeFilter.has(r.engagementType))
     }
+    if (minMonths > 0) {
+      list = list.filter((r) => r.monthsActive >= minMonths)
+    }
     return list
-  }, [rows, firstFrom, firstTo, openFrom, openTo, typeFilter, matterOpenInRange])
+  }, [rows, firstFrom, firstTo, openFrom, openTo, typeFilter, minMonths, matterOpenInRange])
 
   const scenarioRows = useMemo<ScenarioRow[]>(() => {
     return cohortRows.map((r) => {
       const activeMonthsCeil = Math.max(1, Math.ceil(r.monthsActive))
-      const hypothetical = activeMonthsCeil * retainer
+      const hypothetical = downpayment + activeMonthsCeil * retainer
       const delta = hypothetical - r.totalBillable
       return {
         ...r,
@@ -237,7 +268,7 @@ export function ClientsInteractive({
         isWinner: delta > 0,
       }
     })
-  }, [cohortRows, retainer])
+  }, [cohortRows, retainer, downpayment])
 
   const summary = useMemo(() => {
     const totalActual = scenarioRows.reduce((s, r) => s + r.totalBillable, 0)
@@ -553,6 +584,73 @@ export function ClientsInteractive({
             </div>
           </div>
 
+          {/* Minimum months active */}
+          <div className="pt-3 border-t">
+            <div className="flex items-center gap-3 flex-wrap">
+              <Label className="text-xs text-muted-foreground">
+                Minimum months active
+              </Label>
+              <span className="text-[10px] text-muted-foreground">
+                Excludes clients whose activity span (first→last activity) is shorter than this.
+                Useful for stripping out single-day matters that skew per-month math.
+              </span>
+            </div>
+            <div className="mt-2 flex items-center gap-3">
+              <input
+                type="range"
+                min={0}
+                max={24}
+                step={1}
+                value={minMonths}
+                onChange={(e) => {
+                  const v = Number(e.target.value)
+                  setMinMonths(v)
+                  setMinMonthsInput(String(v))
+                }}
+                onMouseUp={(e) =>
+                  syncMinMonthsToUrl(Number((e.target as HTMLInputElement).value))
+                }
+                onTouchEnd={(e) =>
+                  syncMinMonthsToUrl(Number((e.target as HTMLInputElement).value))
+                }
+                className="flex-1 max-w-md accent-blue-600"
+              />
+              <Input
+                type="number"
+                min={0}
+                step={1}
+                className="w-20 h-9"
+                value={minMonthsInput}
+                onChange={(e) => setMinMonthsInput(e.target.value)}
+                onBlur={() => {
+                  const v = Math.max(0, Math.min(60, Number(minMonthsInput) || 0))
+                  setMinMonths(v)
+                  setMinMonthsInput(String(v))
+                  syncMinMonthsToUrl(v)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") e.currentTarget.blur()
+                }}
+              />
+              <span className="text-xs text-muted-foreground">months</span>
+              {minMonths > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setMinMonths(0)
+                    setMinMonthsInput("0")
+                    syncMinMonthsToUrl(0)
+                  }}
+                  className="h-6 text-xs"
+                >
+                  <X className="size-3 mr-1" />
+                  Clear
+                </Button>
+              )}
+            </div>
+          </div>
+
           {/* Engagement type filter */}
           <div className="pt-3 border-t">
             <div className="flex items-center gap-2 mb-2">
@@ -703,14 +801,75 @@ export function ClientsInteractive({
               />
             </div>
           </div>
+
+          <div className="mt-5 grid grid-cols-1 md:grid-cols-[1fr_auto] gap-5 items-end">
+            <div className="flex flex-col gap-2 min-w-0">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs text-muted-foreground">
+                  Initial Downpayment (one-time, charged at intake)
+                </Label>
+                <span className="text-sm font-semibold">{formatCurrency(downpayment)}</span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={25000}
+                step={250}
+                value={downpayment}
+                onChange={(e) => {
+                  const v = Number(e.target.value)
+                  setDownpayment(v)
+                  setDownpaymentInput(String(v))
+                }}
+                onMouseUp={(e) =>
+                  syncDownpaymentToUrl(Number((e.target as HTMLInputElement).value))
+                }
+                onTouchEnd={(e) =>
+                  syncDownpaymentToUrl(Number((e.target as HTMLInputElement).value))
+                }
+                className="w-full accent-blue-600"
+              />
+              <div className="flex justify-between text-[10px] text-muted-foreground">
+                <span>$0</span>
+                <span>$5k</span>
+                <span>$10k</span>
+                <span>$15k</span>
+                <span>$20k</span>
+                <span>$25k</span>
+              </div>
+            </div>
+            <div className="flex flex-col gap-1">
+              <Label className="text-xs text-muted-foreground">Exact Amount</Label>
+              <Input
+                type="number"
+                min={0}
+                step={250}
+                className="w-32 h-9"
+                value={downpaymentInput}
+                onChange={(e) => setDownpaymentInput(e.target.value)}
+                onBlur={() => {
+                  const v = Math.max(0, Math.min(50000, Number(downpaymentInput) || 0))
+                  setDownpayment(v)
+                  setDownpaymentInput(String(v))
+                  syncDownpaymentToUrl(v)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") e.currentTarget.blur()
+                }}
+              />
+            </div>
+          </div>
+
           <p className="mt-3 text-xs text-muted-foreground">
-            Retainer math floors each client&rsquo;s active months to 1 (a flat fee isn&rsquo;t
-            pro-rated below a month). Delta = <em>retainer × ceil(months)</em> −{" "}
-            <em>total billable</em>.
+            Each client pays <em>downpayment</em> once at intake plus{" "}
+            <em>retainer × ceil(months)</em> monthly. Delta ={" "}
+            <em>downpayment + retainer × ceil(months)</em> − <em>total billable</em>.
+            Active months are floored to 1 (a flat fee isn&rsquo;t pro-rated below a month).
           </p>
           <ScenarioMathAudit
             scenarioRows={scenarioRows}
             retainer={retainer}
+            downpayment={downpayment}
             summary={summary}
           />
         </CardContent>
@@ -1239,10 +1398,12 @@ interface SummaryShape {
 function ScenarioMathAudit({
   scenarioRows,
   retainer,
+  downpayment,
   summary,
 }: {
   scenarioRows: ScenarioRow[]
   retainer: number
+  downpayment: number
   summary: SummaryShape
 }) {
   const [open, setOpen] = useState(false)
@@ -1293,7 +1454,9 @@ function ScenarioMathAudit({
     }
   }, [scenarioRows])
 
-  const expectedHypotheticalFromMonthsCeilSum = summary.totalMonthsCeil * retainer
+  const totalDownpayments = downpayment * summary.clientCount
+  const totalMonthly = summary.totalMonthsCeil * retainer
+  const expectedHypothetical = totalDownpayments + totalMonthly
 
   return (
     <div className="mt-4 border-t border-border pt-3">
@@ -1308,6 +1471,7 @@ function ScenarioMathAudit({
         <div className="mt-3 space-y-4 text-xs font-mono bg-muted/30 rounded-md p-4">
           <section>
             <div className="font-semibold mb-1">Inputs</div>
+            <div>downpayment = {formatCurrency(downpayment)} (one-time per client)</div>
             <div>retainer = {formatCurrency(retainer)} / mo</div>
             <div>in-scope clients = {summary.clientCount.toLocaleString()}</div>
           </section>
@@ -1315,22 +1479,30 @@ function ScenarioMathAudit({
           <section>
             <div className="font-semibold mb-1">Per-client formula (applied to each row)</div>
             <div>activeMonthsCeil = max(1, ceil(monthsActive))</div>
-            <div>hypothetical = activeMonthsCeil × retainer</div>
+            <div>hypothetical = downpayment + activeMonthsCeil × retainer</div>
             <div>delta = hypothetical − totalBillable</div>
           </section>
 
           <section>
             <div className="font-semibold mb-1">Firm-level totals</div>
             <div>
+              Σ downpayments = {summary.clientCount.toLocaleString()} ×{" "}
+              {formatCurrency(downpayment)} = {formatCurrency(totalDownpayments)}
+            </div>
+            <div>
               Σ activeMonthsCeil = {summary.totalMonthsCeil.toLocaleString()} months
             </div>
             <div>
               Σ activeMonthsCeil × retainer = {summary.totalMonthsCeil.toLocaleString()} ×{" "}
-              {formatCurrency(retainer)} = {formatCurrency(expectedHypotheticalFromMonthsCeilSum)}
+              {formatCurrency(retainer)} = {formatCurrency(totalMonthly)}
+            </div>
+            <div>
+              expected Σ hypothetical = {formatCurrency(totalDownpayments)} +{" "}
+              {formatCurrency(totalMonthly)} = {formatCurrency(expectedHypothetical)}
             </div>
             <div>
               Σ hypothetical (per-row) = {formatCurrency(audit.sumHypothetical)}{" "}
-              {Math.abs(audit.sumHypothetical - expectedHypotheticalFromMonthsCeilSum) < 0.5 ? (
+              {Math.abs(audit.sumHypothetical - expectedHypothetical) < 0.5 ? (
                 <span className="text-emerald-600">✓ matches</span>
               ) : (
                 <span className="text-rose-600">✗ MISMATCH</span>
@@ -1393,7 +1565,9 @@ function ScenarioMathAudit({
                     <th className="pr-3">monthsActive (raw)</th>
                     <th className="pr-3">ceil</th>
                     <th className="pr-3">totalBillable</th>
-                    <th className="pr-3">hypo = ceil × retainer</th>
+                    <th className="pr-3">downpayment</th>
+                    <th className="pr-3">+ ceil × retainer</th>
+                    <th className="pr-3">= hypo</th>
                     <th className="pr-3">delta</th>
                   </tr>
                 </thead>
@@ -1404,6 +1578,8 @@ function ScenarioMathAudit({
                       <td className="pr-3">{r.monthsActive.toFixed(3)}</td>
                       <td className="pr-3">{r.activeMonthsCeil}</td>
                       <td className="pr-3">{formatCurrency(r.totalBillable)}</td>
+                      <td className="pr-3">{formatCurrency(downpayment)}</td>
+                      <td className="pr-3">{formatCurrency(r.activeMonthsCeil * retainer)}</td>
                       <td className="pr-3">{formatCurrency(r.hypothetical)}</td>
                       <td
                         className={

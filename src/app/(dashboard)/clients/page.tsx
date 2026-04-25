@@ -70,6 +70,18 @@ export default async function ClientsPage({
     Number.isFinite(retainerParam) && retainerParam > 0
       ? Math.min(10000, retainerParam)
       : DEFAULT_RETAINER
+  const downpaymentParam =
+    typeof params.downpayment === "string" ? Number(params.downpayment) : NaN
+  const downpayment =
+    Number.isFinite(downpaymentParam) && downpaymentParam >= 0
+      ? Math.min(50000, downpaymentParam)
+      : 0
+  const minMonthsParam =
+    typeof params.minMonths === "string" ? Number(params.minMonths) : NaN
+  const minMonths =
+    Number.isFinite(minMonthsParam) && minMonthsParam >= 0
+      ? Math.min(60, minMonthsParam)
+      : 0
   const firstFrom = typeof params.firstFrom === "string" ? params.firstFrom : ""
   const firstTo = typeof params.firstTo === "string" ? params.firstTo : ""
   const openFrom = typeof params.openFrom === "string" ? params.openFrom : ""
@@ -325,6 +337,8 @@ Top 5 clients by revenue: ${rows
       <ClientsInteractive
         rows={rows}
         initialRetainer={retainer}
+        initialDownpayment={downpayment}
+        initialMinMonths={minMonths}
         initialFirstFrom={firstFrom}
         initialFirstTo={firstTo}
         initialOpenFrom={openFrom}
