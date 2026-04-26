@@ -27,6 +27,7 @@ import {
 import { KPICard } from "@/components/charts/KPICard"
 import { FirmWeeklyBillableChart } from "@/components/charts/ActivitySpikesCharts"
 import { SpikeExplainer } from "@/components/SpikeExplainer"
+import { SpikeEventAnalysis } from "@/components/SpikeEventAnalysis"
 import { formatCurrency, formatNumber } from "@/lib/utils/format"
 import { tokenizeTriggers, type TriggerKeyword } from "@/lib/spikes"
 import type { SpikeRow } from "@/app/(dashboard)/activity-spikes/page"
@@ -600,6 +601,9 @@ export function ActivitySpikesInteractive({
           </p>
         </CardContent>
       </Card>
+
+      {/* AI-powered event classification across the top 50 spikes */}
+      <SpikeEventAnalysis topSpikes={spikes.slice(0, 50)} />
 
       {/* Spike list with filters + sort + keyword search — collapsed by default */}
       <Card>
