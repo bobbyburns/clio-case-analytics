@@ -174,6 +174,25 @@ export async function POST(req: NextRequest) {
     )
   }
 
+  // Persist each per-spike row so future page loads can show the analysis
+  // without re-billing the Anthropic API.
+  if (analysis.spikes && analysis.spikes.length > 0) {
+    const upsertRows = analysis.spikes.map((s) => ({
+      matter_unique_id: s.matter_unique_id,
+      week_start: s.week_start,
+      primary_event: s.primary_event,
+      secondary_events: s.secondary_events ?? [],
+      narrative: s.narrative ?? "",
+      evidence_quotes: s.evidence_quotes ?? [],
+      model_used: "claude-sonnet-4-20250514",
+      analyzed_at: new Date().toISOString(),
+    }))
+    const { error: upsertErr } = await supabase
+      .from("clio_spike_analyses")
+      .upsert(upsertRows, { onConflict: "matter_unique_id,week_start" })
+    if (upsertErr) console.error("[analyze-spikes] persist failed:", upsertErr.message)
+  }
+
   return NextResponse.json({
     analyzedCount: enriched.length,
     totalActivities: enriched.reduce((s, e) => s + e.activities.length, 0),

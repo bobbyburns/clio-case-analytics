@@ -4,7 +4,9 @@ import {
   fetchMatters,
   fetchMatterWeeklyBillable,
   fetchSpikeActivities,
+  fetchSpikeAnalyses,
   type SpikeActivityRow,
+  type SpikeAnalysisRecord,
 } from "@/lib/queries"
 import {
   computeMatterBaselines,
@@ -51,13 +53,15 @@ export default async function ActivitySpikesPage({
   const t0 = Date.now()
   let matters: Matter[]
   let weeks: Awaited<ReturnType<typeof fetchMatterWeeklyBillable>>
+  let analysesByKey: Map<string, SpikeAnalysisRecord>
   try {
-    ;[matters, weeks] = await Promise.all([
+    ;[matters, weeks, analysesByKey] = await Promise.all([
       fetchMatters(supabase, filters),
       fetchMatterWeeklyBillable(supabase, filters),
+      fetchSpikeAnalyses(supabase),
     ])
     console.log(
-      `[activity-spikes] ${matters.length} matters / ${weeks.length} matter-weeks in ${Date.now() - t0}ms`,
+      `[activity-spikes] ${matters.length} matters / ${weeks.length} matter-weeks / ${analysesByKey.size} stored analyses in ${Date.now() - t0}ms`,
     )
   } catch (err) {
     const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
@@ -110,18 +114,31 @@ export default async function ActivitySpikesPage({
     excludeWeekStart,
   })
 
-  // Decorate spikes with matter/client display + lifecycle stage for the table.
+  // Decorate spikes with matter/client display + lifecycle stage for the table,
+  // plus any persisted AI analysis so the page shows pre-classified events
+  // without re-running Claude.
   const spikeRows = spikes.map((s) => {
     const m = matterById.get(s.matter_unique_id)
     const client = m ? parseClientsField(m.clients) : { display: "—", isJoint: false }
     const lc = lifecycleByMatter.get(s.matter_unique_id)
     const stage = lc ? lifecycleStage(s.week_start, lc.first, lc.last, lc.spanWeeks) : "Unknown"
+    const key = `${s.matter_unique_id}__${s.week_start}`
+    const stored = analysesByKey.get(key)
     return {
       ...s,
       display_number: m?.display_number ?? s.matter_unique_id,
       client_display: client.display,
       mapped_category: m?.mapped_category ?? null,
       lifecycleStage: stage,
+      storedAnalysis: stored
+        ? {
+            primary_event: stored.primary_event,
+            secondary_events: stored.secondary_events,
+            narrative: stored.narrative,
+            evidence_quotes: stored.evidence_quotes,
+            analyzed_at: stored.analyzed_at,
+          }
+        : null,
     }
   })
 
@@ -240,11 +257,20 @@ Trigger keywords are computed client-side from the description field across all 
   )
 }
 
+export interface StoredSpikeAnalysis {
+  primary_event: string
+  secondary_events: string[]
+  narrative: string
+  evidence_quotes: string[]
+  analyzed_at: string
+}
+
 export type SpikeRow = Spike & {
   display_number: string
   client_display: string
   mapped_category: string | null
   lifecycleStage: string
+  storedAnalysis: StoredSpikeAnalysis | null
 }
 
 export type LifecycleStage =

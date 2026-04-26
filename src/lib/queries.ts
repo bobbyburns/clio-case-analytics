@@ -321,6 +321,42 @@ export async function fetchSpikeActivities(
   }))
 }
 
+export interface SpikeAnalysisRecord {
+  matter_unique_id: string
+  week_start: string
+  primary_event: string
+  secondary_events: string[]
+  narrative: string
+  evidence_quotes: string[]
+  model_used: string | null
+  analyzed_at: string
+}
+
+export async function fetchSpikeAnalyses(
+  supabase: SupabaseClient,
+): Promise<Map<string, SpikeAnalysisRecord>> {
+  const all: SpikeAnalysisRecord[] = []
+  const PAGE = 1000
+  let offset = 0
+  while (true) {
+    const { data, error } = await supabase
+      .from("clio_spike_analyses")
+      .select("*")
+      .order("analyzed_at", { ascending: false })
+      .range(offset, offset + PAGE - 1)
+    if (error) throw error
+    if (!data || data.length === 0) break
+    all.push(...(data as SpikeAnalysisRecord[]))
+    if (data.length < PAGE) break
+    offset += PAGE
+  }
+  const map = new Map<string, SpikeAnalysisRecord>()
+  for (const r of all) {
+    map.set(`${r.matter_unique_id}__${r.week_start}`, r)
+  }
+  return map
+}
+
 export interface ActivityPatternsRollup {
   total_entries: number
   time_entries: number

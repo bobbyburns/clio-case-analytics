@@ -752,22 +752,36 @@ export function ActivitySpikesInteractive({
             </select>
           </div>
 
-          <Table>
+          <Table className="table-fixed text-xs">
+            <colgroup>
+              <col className="w-7" />
+              <col className="w-[180px]" />
+              <col />
+              <col className="w-[88px]" />
+              <col className="w-[78px]" />
+              <col className="w-[80px]" />
+              <col className="w-[56px]" />
+              <col className="w-[60px]" />
+              <col className="w-[60px]" />
+              <col className="w-[88px]" />
+              <col className="w-[64px]" />
+              <col className="w-[88px]" />
+            </colgroup>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-8" />
+                <TableHead className="px-1" />
                 <SortHeader label="Matter" k="display_number" sortKey={sortKey} sortDir={sortDir} onClick={() => toggleSort("display_number")} />
                 <SortHeader label="Client" k="client_display" sortKey={sortKey} sortDir={sortDir} onClick={() => toggleSort("client_display")} />
                 <SortHeader label="Week of" k="week_start" sortKey={sortKey} sortDir={sortDir} onClick={() => toggleSort("week_start")} />
                 <SortHeader label="Billable" k="billable" sortKey={sortKey} sortDir={sortDir} onClick={() => toggleSort("billable")} align="right" />
                 <SortHeader
-                  label="Baseline median"
+                  label="Baseline"
                   k="baselineMedian"
                   sortKey={sortKey}
                   sortDir={sortDir}
                   onClick={() => toggleSort("baselineMedian")}
                   align="right"
-                  title="The middle of this matter's weekly billable totals — the matter's normal week."
+                  title="Baseline median — the middle of this matter's weekly billable totals (the matter's normal week)."
                 />
                 <SortHeader
                   label="Ratio"
@@ -779,15 +793,15 @@ export function ActivitySpikesInteractive({
                   title="Week billable ÷ baseline median. 5× = this week earned 5× the matter's normal week."
                 />
                 <SortHeader label="Hours" k="hours" sortKey={sortKey} sortDir={sortDir} onClick={() => toggleSort("hours")} align="right" />
-                <SortHeader label="Activities" k="activity_count" sortKey={sortKey} sortDir={sortDir} onClick={() => toggleSort("activity_count")} align="right" />
+                <SortHeader label="Acts" k="activity_count" sortKey={sortKey} sortDir={sortDir} onClick={() => toggleSort("activity_count")} align="right" title="Activity count" />
                 <SortHeader
-                  label="Suggested surcharge"
+                  label="Surcharge"
                   k="suggestedSurcharge"
                   sortKey={sortKey}
                   sortDir={sortDir}
                   onClick={() => toggleSort("suggestedSurcharge")}
                   align="right"
-                  title="Spike billable minus baseline. Roughly: extra you'd need to charge to break even on this week."
+                  title="Suggested surcharge = spike billable minus baseline. Roughly the extra you'd need to charge to break even on this week."
                 />
                 <SortHeader label="Rule" k="rule" sortKey={sortKey} sortDir={sortDir} onClick={() => toggleSort("rule")} />
                 <TableHead title="When in the matter's lifecycle this spike happened">Stage</TableHead>
@@ -999,7 +1013,17 @@ function SpikeRowExpander({
   const surcharge = Math.max(0, spike.billable - spike.baselineMedian)
   const [aiLoading, setAiLoading] = useState(false)
   const [aiError, setAiError] = useState<string | null>(null)
-  const [aiResult, setAiResult] = useState<SingleSpikeAnalysis | null>(null)
+  const [aiResult, setAiResult] = useState<SingleSpikeAnalysis | null>(
+    spike.storedAnalysis
+      ? {
+          primary_event: spike.storedAnalysis.primary_event,
+          secondary_events: spike.storedAnalysis.secondary_events,
+          narrative: spike.storedAnalysis.narrative,
+          evidence_quotes: spike.storedAnalysis.evidence_quotes,
+        }
+      : null,
+  )
+  const isFromCache = !aiLoading && aiResult !== null && spike.storedAnalysis !== null && spike.storedAnalysis.primary_event === aiResult.primary_event && !aiError
 
   const runAnalysis = async () => {
     setAiLoading(true)
@@ -1056,12 +1080,16 @@ function SpikeRowExpander({
         className="cursor-pointer hover:bg-muted/40"
         onClick={onToggle}
       >
-        <TableCell>
+        <TableCell className="px-1">
           {isExpanded ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
         </TableCell>
-        <TableCell className="font-mono text-xs">{spike.display_number}</TableCell>
-        <TableCell className="text-sm">{spike.client_display}</TableCell>
-        <TableCell className="font-mono text-xs">{spike.week_start}</TableCell>
+        <TableCell className="font-mono text-[11px] truncate" title={spike.display_number}>
+          {spike.display_number}
+        </TableCell>
+        <TableCell className="truncate" title={spike.client_display}>
+          {spike.client_display}
+        </TableCell>
+        <TableCell className="font-mono text-[11px]">{spike.week_start}</TableCell>
         <TableCell className="text-right tabular-nums font-medium">
           {formatCurrency(spike.billable)}
         </TableCell>
@@ -1078,16 +1106,23 @@ function SpikeRowExpander({
         </TableCell>
         <TableCell>
           <span
-            className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ${
+            className={`inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
               spike.rule === "ratio"
                 ? "bg-blue-50 text-blue-700"
                 : "bg-amber-50 text-amber-700"
             }`}
           >
-            {spike.rule}
+            {spike.rule === "ratio" ? "ratio" : "abs"}
           </span>
         </TableCell>
-        <TableCell className="text-xs text-muted-foreground">{spike.lifecycleStage}</TableCell>
+        <TableCell className="text-[10px] text-muted-foreground truncate" title={spike.storedAnalysis ? `${spike.lifecycleStage} · AI: ${spike.storedAnalysis.primary_event}` : spike.lifecycleStage}>
+          <div className="truncate">{spike.lifecycleStage}</div>
+          {spike.storedAnalysis && (
+            <div className="text-[9px] font-medium text-violet-700 truncate">
+              ✦ {spike.storedAnalysis.primary_event}
+            </div>
+          )}
+        </TableCell>
       </TableRow>
 
       {isExpanded && (
@@ -1140,6 +1175,11 @@ function SpikeRowExpander({
                         + {ev}
                       </span>
                     ))}
+                    {isFromCache && spike.storedAnalysis && (
+                      <span className="text-[10px] text-muted-foreground">
+                        Saved · {new Date(spike.storedAnalysis.analyzed_at).toLocaleString()}
+                      </span>
+                    )}
                   </div>
                   <p className="text-sm text-foreground">{aiResult.narrative}</p>
                   {aiResult.evidence_quotes.length > 0 && (
