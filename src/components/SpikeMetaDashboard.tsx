@@ -7,6 +7,18 @@ import { Loader2, BrainCircuit, ChevronDown, ChevronRight, AlertTriangle } from 
 import { formatCurrency, formatNumber } from "@/lib/utils/format"
 import type { SpikeRow, StoredSpikeAnalysis } from "@/app/(dashboard)/activity-spikes/page"
 
+interface UnitEconomics {
+  recommended_surcharge: number
+  actual_avg_billable: number
+  repriced_avg_cost: number
+  avg_attorney_hours: number
+  avg_paralegal_hours: number
+  avg_total_hours: number
+  avg_days: number
+  spike_day_unit_cost: number
+  surcharge_to_unit_cost_ratio: number
+}
+
 interface SurchargeTier {
   event_type: string
   recommended_surcharge: number
@@ -14,6 +26,9 @@ interface SurchargeTier {
   estimated_annual_revenue: number
   spike_frequency: number
   caveats: string[]
+  unit_economics?: UnitEconomics
+  market_pressure_test?: string
+  margin_analysis?: string
 }
 
 interface ThematicCluster {
@@ -24,8 +39,16 @@ interface ThematicCluster {
   insight: string
 }
 
+interface RateAssumptions {
+  attorney_rate: number
+  paralegal_rate: number
+  note?: string
+}
+
 interface MetaAnalysisResult {
   inputCount: number
+  rateAssumptions?: RateAssumptions
+  rate_assumptions?: RateAssumptions
   executive_summary: string
   surcharge_tiers: SurchargeTier[]
   thematic_clusters: ThematicCluster[]
@@ -203,6 +226,24 @@ export function SpikeMetaDashboard({ spikes, sessionAnalyses }: Props) {
                   Estimated combined annual revenue impact if all surcharge tiers are
                   adopted: <strong>{formatCurrency(totalRevenueImpact)}</strong>.
                 </p>
+                {(result.rateAssumptions ?? result.rate_assumptions) && (
+                  <div className="mt-2 rounded-md bg-amber-50 border border-amber-200 p-2 text-xs">
+                    <strong className="text-amber-900">Rate assumptions:</strong>{" "}
+                    <span className="font-mono">
+                      ${(result.rateAssumptions ?? result.rate_assumptions)!.attorney_rate}/hr attorney
+                    </span>{" "}
+                    +{" "}
+                    <span className="font-mono">
+                      ${(result.rateAssumptions ?? result.rate_assumptions)!.paralegal_rate}/hr paralegal
+                    </span>
+                    {(result.rateAssumptions ?? result.rate_assumptions)!.note && (
+                      <span className="text-amber-800">
+                        {" — "}
+                        {(result.rateAssumptions ?? result.rate_assumptions)!.note}
+                      </span>
+                    )}
+                  </div>
+                )}
               </section>
 
               {/* Surcharge tiers — interactive */}
@@ -255,11 +296,70 @@ export function SpikeMetaDashboard({ spikes, sessionAnalyses }: Props) {
                                 style={{ width: `${widthPct}%` }}
                               />
                             </div>
+
+                            {/* Unit economics grid — the load-bearing numbers */}
+                            {t.unit_economics && (
+                              <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2 rounded-md bg-slate-50 border border-slate-200 p-2 text-[11px]">
+                                <UnitMetric
+                                  label="Actual avg billable"
+                                  value={formatCurrency(t.unit_economics.actual_avg_billable)}
+                                  hint="What the firm historically billed"
+                                />
+                                <UnitMetric
+                                  label="Repriced cost"
+                                  value={formatCurrency(t.unit_economics.repriced_avg_cost)}
+                                  hint={`At $400/hr atty + $225/hr paralegal`}
+                                  emphasize
+                                />
+                                <UnitMetric
+                                  label={`${t.event_type}-Spike-Day`}
+                                  value={formatCurrency(t.unit_economics.spike_day_unit_cost)}
+                                  hint={`Cost / day across ${t.unit_economics.avg_days.toFixed(1)} avg days`}
+                                />
+                                <UnitMetric
+                                  label="Markup ratio"
+                                  value={`${t.unit_economics.surcharge_to_unit_cost_ratio.toFixed(2)}×`}
+                                  hint="Surcharge ÷ repriced cost"
+                                  warn={t.unit_economics.surcharge_to_unit_cost_ratio < 1}
+                                />
+                                <UnitMetric
+                                  label="Avg attorney hrs"
+                                  value={t.unit_economics.avg_attorney_hours.toFixed(1)}
+                                />
+                                <UnitMetric
+                                  label="Avg paralegal hrs"
+                                  value={t.unit_economics.avg_paralegal_hours.toFixed(1)}
+                                />
+                                <UnitMetric
+                                  label="Avg total hrs"
+                                  value={t.unit_economics.avg_total_hours.toFixed(1)}
+                                />
+                                <UnitMetric
+                                  label="Avg days"
+                                  value={t.unit_economics.avg_days.toFixed(1)}
+                                />
+                              </div>
+                            )}
+
                             <p className="text-xs text-muted-foreground mt-2">
                               {t.rationale}
                             </p>
+
+                            {t.margin_analysis && (
+                              <p className="text-xs mt-1 text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-md p-2">
+                                <strong>Margin:</strong> {t.margin_analysis}
+                              </p>
+                            )}
+
+                            {t.market_pressure_test && (
+                              <div className="mt-2 rounded-md bg-blue-50 border border-blue-200 p-2 text-xs">
+                                <strong className="text-blue-900">Market pressure-test:</strong>{" "}
+                                <span className="text-blue-900/90">{t.market_pressure_test}</span>
+                              </div>
+                            )}
+
                             {t.caveats.length > 0 && (
-                              <ul className="mt-1 space-y-0.5 text-[11px] text-amber-700">
+                              <ul className="mt-2 space-y-0.5 text-[11px] text-amber-700">
                                 {t.caveats.map((c, i) => (
                                   <li key={i}>⚠ {c}</li>
                                 ))}
@@ -417,5 +517,45 @@ export function SpikeMetaDashboard({ spikes, sessionAnalyses }: Props) {
         </CardContent>
       )}
     </Card>
+  )
+}
+
+function UnitMetric({
+  label,
+  value,
+  hint,
+  emphasize = false,
+  warn = false,
+}: {
+  label: string
+  value: string
+  hint?: string
+  emphasize?: boolean
+  warn?: boolean
+}) {
+  return (
+    <div
+      className={`rounded-md p-2 ${
+        warn
+          ? "bg-rose-50 border border-rose-200"
+          : emphasize
+            ? "bg-indigo-50 border border-indigo-200"
+            : "bg-background border border-slate-200"
+      }`}
+    >
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+        {label}
+      </div>
+      <div
+        className={`font-semibold tabular-nums mt-0.5 ${
+          warn ? "text-rose-700" : emphasize ? "text-indigo-900" : "text-foreground"
+        }`}
+      >
+        {value}
+      </div>
+      {hint && (
+        <div className="text-[10px] text-muted-foreground mt-0.5">{hint}</div>
+      )}
+    </div>
   )
 }
