@@ -303,6 +303,17 @@ Produce the strategic JSON described in the system prompt. Recommendations MUST 
     )
   }
 
+  // Persist so the dashboard hydrates on reload without re-billing the API.
+  const { error: persistErr } = await supabase.from("clio_meta_analyses").insert({
+    input_count: inputs.length,
+    attorney_rate: ATTORNEY_RATE,
+    paralegal_rate: PARALEGAL_RATE,
+    result,
+    event_aggregates: eventAggregates,
+    model_used: "claude-sonnet-4-20250514",
+  })
+  if (persistErr) console.error("[meta-spike-analysis] persist failed:", persistErr.message)
+
   return NextResponse.json({
     inputCount: inputs.length,
     rateAssumptions: { attorney_rate: ATTORNEY_RATE, paralegal_rate: PARALEGAL_RATE },

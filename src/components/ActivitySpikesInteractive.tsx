@@ -33,7 +33,7 @@ import { SpikeMetaDashboard } from "@/components/SpikeMetaDashboard"
 import { formatCurrency, formatNumber } from "@/lib/utils/format"
 import { tokenizeTriggers, type TriggerKeyword } from "@/lib/spikes"
 import type { SpikeRow, StoredSpikeAnalysis } from "@/app/(dashboard)/activity-spikes/page"
-import type { SpikeActivityRow } from "@/lib/queries"
+import type { SpikeActivityRow, MetaAnalysisRecord } from "@/lib/queries"
 
 interface KpiBundle {
   spikeCount: number
@@ -89,6 +89,7 @@ interface Props {
   initialExpenseCategories: CategoryTally[]
   initialTypeSplit: TypeSplit
   leaderboardSampleSize: number
+  initialMetaAnalysis: MetaAnalysisRecord | null
   kpis: KpiBundle
 }
 
@@ -103,6 +104,7 @@ export function ActivitySpikesInteractive({
   initialExpenseCategories,
   initialTypeSplit,
   leaderboardSampleSize,
+  initialMetaAnalysis,
   kpis,
 }: Props) {
   const [spikeListOpen, setSpikeListOpen] = useState(false)
@@ -634,7 +636,11 @@ export function ActivitySpikesInteractive({
       />
 
       {/* Second-pass meta-analysis: surcharge strategy across all classified spikes */}
-      <SpikeMetaDashboard spikes={spikes} sessionAnalyses={sessionAnalyses} />
+      <SpikeMetaDashboard
+        spikes={spikes}
+        sessionAnalyses={sessionAnalyses}
+        initialMetaAnalysis={initialMetaAnalysis}
+      />
 
       {/* Spike list with filters + sort + keyword search — collapsed by default */}
       <Card>

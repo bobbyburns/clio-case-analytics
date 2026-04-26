@@ -63,8 +63,22 @@ export function SpikeEventAnalysis({ topSpikes, onAnalysisComplete }: Props) {
   const [loading, setLoading] = useState(false)
   const [progress, setProgress] = useState<Progress | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [perSpike, setPerSpike] = useState<SpikeAnalysisRow[]>([])
-  const [analyzedCount, setAnalyzedCount] = useState(0)
+  // Hydrate from any spikes that already have a stored AI analysis in the DB
+  // so the user doesn't see an empty card after a page reload — the saved
+  // results re-render immediately. Re-running fetches fresh classifications.
+  const initialPerSpike: SpikeAnalysisRow[] = topSpikes
+    .filter((s) => s.storedAnalysis)
+    .map((s) => ({
+      matter_unique_id: s.matter_unique_id,
+      week_start: s.week_start,
+      display_number: s.display_number,
+      primary_event: s.storedAnalysis!.primary_event,
+      secondary_events: s.storedAnalysis!.secondary_events,
+      narrative: s.storedAnalysis!.narrative,
+      evidence_quotes: s.storedAnalysis!.evidence_quotes,
+    }))
+  const [perSpike, setPerSpike] = useState<SpikeAnalysisRow[]>(initialPerSpike)
+  const [analyzedCount, setAnalyzedCount] = useState(initialPerSpike.length)
   const [totalActivities, setTotalActivities] = useState(0)
 
   const inScope = topSpikes.slice(0, 50)

@@ -5,8 +5,10 @@ import {
   fetchMatterWeeklyBillable,
   fetchSpikeActivities,
   fetchSpikeAnalyses,
+  fetchLatestMetaAnalysis,
   type SpikeActivityRow,
   type SpikeAnalysisRecord,
+  type MetaAnalysisRecord,
 } from "@/lib/queries"
 import {
   computeMatterBaselines,
@@ -54,14 +56,16 @@ export default async function ActivitySpikesPage({
   let matters: Matter[]
   let weeks: Awaited<ReturnType<typeof fetchMatterWeeklyBillable>>
   let analysesByKey: Map<string, SpikeAnalysisRecord>
+  let latestMeta: MetaAnalysisRecord | null
   try {
-    ;[matters, weeks, analysesByKey] = await Promise.all([
+    ;[matters, weeks, analysesByKey, latestMeta] = await Promise.all([
       fetchMatters(supabase, filters),
       fetchMatterWeeklyBillable(supabase, filters),
       fetchSpikeAnalyses(supabase),
+      fetchLatestMetaAnalysis(supabase),
     ])
     console.log(
-      `[activity-spikes] ${matters.length} matters / ${weeks.length} matter-weeks / ${analysesByKey.size} stored analyses in ${Date.now() - t0}ms`,
+      `[activity-spikes] ${matters.length} matters / ${weeks.length} matter-weeks / ${analysesByKey.size} stored analyses / meta=${latestMeta ? "yes" : "no"} in ${Date.now() - t0}ms`,
     )
   } catch (err) {
     const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
@@ -240,6 +244,7 @@ Trigger keywords are computed client-side from the description field across all 
         initialExpenseCategories={initialExpenseCategories}
         initialTypeSplit={initialTypeSplit}
         leaderboardSampleSize={leaderboardSpikes.length}
+        initialMetaAnalysis={latestMeta}
         kpis={{
           spikeCount: spikes.length,
           totalFirmBillable,

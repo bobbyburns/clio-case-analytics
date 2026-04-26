@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Loader2, BrainCircuit, ChevronDown, ChevronRight, AlertTriangle } from "lucide-react"
 import { formatCurrency, formatNumber } from "@/lib/utils/format"
 import type { SpikeRow, StoredSpikeAnalysis } from "@/app/(dashboard)/activity-spikes/page"
+import type { MetaAnalysisRecord } from "@/lib/queries"
 
 interface UnitEconomics {
   recommended_surcharge: number
@@ -63,13 +64,37 @@ interface Props {
   spikes: SpikeRow[]
   /** Live in-session analyses — overrides the SSR-loaded storedAnalysis when present. */
   sessionAnalyses: Map<string, StoredSpikeAnalysis>
+  /** Most recent stored meta-analysis from the DB, if any. Hydrates the dashboard on load. */
+  initialMetaAnalysis: MetaAnalysisRecord | null
 }
 
-export function SpikeMetaDashboard({ spikes, sessionAnalyses }: Props) {
+function hydrateInitialResult(rec: MetaAnalysisRecord | null): MetaAnalysisResult | null {
+  if (!rec) return null
+  const r = rec.result as Partial<MetaAnalysisResult> | undefined
+  if (!r) return null
+  return {
+    inputCount: rec.input_count,
+    rateAssumptions: {
+      attorney_rate: rec.attorney_rate,
+      paralegal_rate: rec.paralegal_rate,
+    },
+    executive_summary: r.executive_summary ?? "",
+    surcharge_tiers: r.surcharge_tiers ?? [],
+    thematic_clusters: r.thematic_clusters ?? [],
+    lifecycle_insights: r.lifecycle_insights ?? [],
+    attorney_observations: r.attorney_observations ?? "",
+    risk_flags: r.risk_flags ?? [],
+    recommended_next_steps: r.recommended_next_steps ?? [],
+  }
+}
+
+export function SpikeMetaDashboard({ spikes, sessionAnalyses, initialMetaAnalysis }: Props) {
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [result, setResult] = useState<MetaAnalysisResult | null>(null)
+  const [result, setResult] = useState<MetaAnalysisResult | null>(() =>
+    hydrateInitialResult(initialMetaAnalysis),
+  )
   const [activeEvent, setActiveEvent] = useState<string | null>(null)
 
   // Build the input set from any spike that has a classification (stored or live).
@@ -225,6 +250,11 @@ export function SpikeMetaDashboard({ spikes, sessionAnalyses }: Props) {
                   Synthesized from {result.inputCount.toLocaleString()} classified spikes.
                   Estimated combined annual revenue impact if all surcharge tiers are
                   adopted: <strong>{formatCurrency(totalRevenueImpact)}</strong>.
+                  {initialMetaAnalysis && (
+                    <span className="ml-2 text-[10px] inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-800">
+                      Saved · {new Date(initialMetaAnalysis.created_at).toLocaleString()}
+                    </span>
+                  )}
                 </p>
                 {(result.rateAssumptions ?? result.rate_assumptions) && (
                   <div className="mt-2 rounded-md bg-amber-50 border border-amber-200 p-2 text-xs">

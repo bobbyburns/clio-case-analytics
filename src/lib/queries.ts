@@ -357,6 +357,33 @@ export async function fetchSpikeAnalyses(
   return map
 }
 
+export interface MetaAnalysisRecord {
+  id: number
+  input_count: number
+  attorney_rate: number
+  paralegal_rate: number
+  result: Record<string, unknown>
+  event_aggregates: unknown[]
+  model_used: string | null
+  created_at: string
+}
+
+export async function fetchLatestMetaAnalysis(
+  supabase: SupabaseClient,
+): Promise<MetaAnalysisRecord | null> {
+  const { data, error } = await supabase
+    .from("clio_meta_analyses")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error) {
+    console.error("[fetchLatestMetaAnalysis]", error.message)
+    return null
+  }
+  return (data as MetaAnalysisRecord | null) ?? null
+}
+
 export interface ActivityPatternsRollup {
   total_entries: number
   time_entries: number
