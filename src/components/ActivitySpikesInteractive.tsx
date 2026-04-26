@@ -22,6 +22,7 @@ import {
   ArrowUp,
   Loader2,
   Search,
+  Sparkles,
   X,
 } from "lucide-react"
 import { KPICard } from "@/components/charts/KPICard"
@@ -967,6 +968,13 @@ function SortHeader({
   )
 }
 
+interface SingleSpikeAnalysis {
+  primary_event: string
+  secondary_events: string[]
+  narrative: string
+  evidence_quotes: string[]
+}
+
 function SpikeRowExpander({
   rowKey,
   spike,
@@ -989,6 +997,59 @@ function SpikeRowExpander({
   onToggle: () => void
 }) {
   const surcharge = Math.max(0, spike.billable - spike.baselineMedian)
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiError, setAiError] = useState<string | null>(null)
+  const [aiResult, setAiResult] = useState<SingleSpikeAnalysis | null>(null)
+
+  const runAnalysis = async () => {
+    setAiLoading(true)
+    setAiError(null)
+    try {
+      const res = await fetch("/api/analyze-spikes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          spikes: [
+            {
+              matter_unique_id: spike.matter_unique_id,
+              week_start: spike.week_start,
+              display_number: spike.display_number,
+              client_display: spike.client_display,
+              billable: spike.billable,
+              ratio: Number.isFinite(spike.ratio) ? spike.ratio : 0,
+              hours: spike.hours,
+            },
+          ],
+        }),
+      })
+      const text = await res.text()
+      let data: { spikes?: SingleSpikeAnalysis[]; error?: string }
+      try {
+        data = JSON.parse(text)
+      } catch {
+        // Server returned non-JSON (e.g. function timeout / Vercel error page).
+        setAiError(
+          `Server returned non-JSON (HTTP ${res.status}). First 200 chars: ${text.slice(0, 200)}`,
+        )
+        return
+      }
+      if (!res.ok) {
+        setAiError(data.error ?? `HTTP ${res.status}`)
+        return
+      }
+      const first = data.spikes?.[0]
+      if (!first) {
+        setAiError("AI returned no analysis for this spike")
+        return
+      }
+      setAiResult(first)
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setAiLoading(false)
+    }
+  }
+
   return (
     <>
       <TableRow
@@ -1031,7 +1092,67 @@ function SpikeRowExpander({
 
       {isExpanded && (
         <TableRow>
-          <TableCell colSpan={12} className="bg-muted/30 p-4">
+          <TableCell colSpan={12} className="bg-muted/30 p-4 space-y-3">
+            {/* AI per-spike analysis */}
+            <div className="rounded-md border border-violet-200 bg-violet-50/40 p-3">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="text-xs">
+                  <span className="font-semibold text-violet-900">
+                    <Sparkles className="size-3 inline mr-1 -mt-0.5" />
+                    AI event classification for this spike
+                  </span>
+                  <span className="text-muted-foreground ml-2">
+                    Sends just this matter-week to Claude to identify the underlying event.
+                  </span>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={runAnalysis}
+                  disabled={aiLoading}
+                  className="h-7 bg-violet-600 hover:bg-violet-700 text-xs"
+                >
+                  {aiLoading ? (
+                    <>
+                      <Loader2 className="size-3 mr-1.5 animate-spin" /> Analyzing…
+                    </>
+                  ) : aiResult ? (
+                    "Re-analyze"
+                  ) : (
+                    "Analyze this spike"
+                  )}
+                </Button>
+              </div>
+              {aiError && (
+                <p className="text-xs text-rose-700 mt-2 break-all">{aiError}</p>
+              )}
+              {aiResult && (
+                <div className="mt-3 space-y-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="inline-flex rounded-full border border-violet-300 bg-violet-100 text-violet-900 px-2.5 py-0.5 text-xs font-medium">
+                      {aiResult.primary_event}
+                    </span>
+                    {aiResult.secondary_events.map((ev) => (
+                      <span
+                        key={ev}
+                        className="inline-flex rounded-full border border-slate-300 bg-slate-100 text-slate-700 px-2 py-0.5 text-[10px]"
+                      >
+                        + {ev}
+                      </span>
+                    ))}
+                  </div>
+                  <p className="text-sm text-foreground">{aiResult.narrative}</p>
+                  {aiResult.evidence_quotes.length > 0 && (
+                    <ul className="space-y-0.5 text-[11px] italic text-muted-foreground">
+                      {aiResult.evidence_quotes.map((q, i) => (
+                        <li key={i}>&ldquo;{q}&rdquo;</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+
             {isLoading ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2 className="size-4 animate-spin" /> Loading activities…

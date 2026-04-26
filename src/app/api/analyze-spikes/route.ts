@@ -132,9 +132,10 @@ export async function POST(req: NextRequest) {
 
   const client = new Anthropic({ apiKey })
   let analysis: { spikes: SpikeAnalysisRow[]; aggregate: AggregateInsight[] }
+  let rawText = ""
   try {
     const response = await client.messages.create({
-      model: "claude-sonnet-4-6",
+      model: "claude-sonnet-4-20250514",
       max_tokens: 8000,
       system: SYSTEM_PROMPT,
       messages: [
@@ -144,16 +145,33 @@ export async function POST(req: NextRequest) {
         },
       ],
     })
-    const text = response.content
+    rawText = response.content
       .filter((c): c is Anthropic.TextBlock => c.type === "text")
       .map((c) => c.text)
       .join("")
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error("[analyze-spikes] Claude call failed:", msg)
+    return NextResponse.json(
+      { error: `Claude API call failed: ${msg}` },
+      { status: 500 },
+    )
+  }
+
+  try {
     // Strip code-fence wrapping if Claude added one despite being told not to.
-    const stripped = text.replace(/^```(?:json)?\s*/, "").replace(/```\s*$/, "").trim()
+    const stripped = rawText.replace(/^```(?:json)?\s*/, "").replace(/```\s*$/, "").trim()
     analysis = JSON.parse(stripped)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    return NextResponse.json({ error: `Claude analysis failed: ${msg}` }, { status: 500 })
+    console.error("[analyze-spikes] JSON parse failed:", msg, "raw:", rawText.slice(0, 500))
+    return NextResponse.json(
+      {
+        error: `AI returned non-JSON: ${msg}`,
+        rawSnippet: rawText.slice(0, 500),
+      },
+      { status: 500 },
+    )
   }
 
   return NextResponse.json({
