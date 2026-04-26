@@ -74,6 +74,30 @@ export default async function ActivitySpikesPage({
   const inScopeMatterIds = new Set(matters.map((m) => m.unique_id))
   const inScopeWeeks = weeks.filter((w) => inScopeMatterIds.has(w.matter_unique_id))
 
+  // For each matter, pre-compute first/last activity week so we can bucket
+  // spikes by lifecycle stage (first month, mid-case, last month, etc.).
+  const lifecycleByMatter = new Map<string, { first: string; last: string; spanWeeks: number }>()
+  {
+    const grouped = new Map<string, string[]>()
+    for (const w of inScopeWeeks) {
+      const arr = grouped.get(w.matter_unique_id)
+      if (arr) arr.push(w.week_start)
+      else grouped.set(w.matter_unique_id, [w.week_start])
+    }
+    for (const [mid, wks] of grouped.entries()) {
+      const sorted = [...wks].sort()
+      const first = sorted[0]
+      const last = sorted[sorted.length - 1]
+      const days =
+        (new Date(last).getTime() - new Date(first).getTime()) / (1000 * 60 * 60 * 24)
+      lifecycleByMatter.set(mid, {
+        first,
+        last,
+        spanWeeks: Math.max(1, Math.round(days / 7) + 1),
+      })
+    }
+  }
+
   const baselines = computeMatterBaselines(inScopeWeeks)
   const excludeWeekStart = currentIsoWeekStart()
   const spikes = detectSpikes(inScopeWeeks, baselines, {
@@ -82,15 +106,30 @@ export default async function ActivitySpikesPage({
     excludeWeekStart,
   })
 
-  // Decorate spikes with matter/client display for the table.
+  // Decorate spikes with matter/client display + lifecycle stage for the table.
   const spikeRows = spikes.map((s) => {
     const m = matterById.get(s.matter_unique_id)
     const client = m ? parseClientsField(m.clients) : { display: "—", isJoint: false }
+    const lc = lifecycleByMatter.get(s.matter_unique_id)
+    const stage = lc ? lifecycleStage(s.week_start, lc.first, lc.last, lc.spanWeeks) : "Unknown"
     return {
       ...s,
       display_number: m?.display_number ?? s.matter_unique_id,
       client_display: client.display,
       mapped_category: m?.mapped_category ?? null,
+      lifecycleStage: stage,
+    }
+  })
+
+  // Spike timing distribution across lifecycle stages.
+  const STAGE_ORDER = ["First month", "Early", "Middle", "Late", "Last month", "Single-month case"] as const
+  const stageDistribution = STAGE_ORDER.map((stage) => {
+    const matched = spikeRows.filter((s) => s.lifecycleStage === stage)
+    return {
+      stage,
+      spikeCount: matched.length,
+      spikeBillable: matched.reduce((sum, s) => sum + s.billable, 0),
+      pctOfSpikes: spikes.length > 0 ? (matched.length / spikes.length) * 100 : 0,
     }
   })
 
@@ -162,6 +201,7 @@ Trigger keywords are computed client-side from the description field across all 
         spikeWeekSet={Array.from(spikeWeekSet)}
         initialRatio={ratioThreshold}
         initialFloor={absoluteFloor}
+        stageDistribution={stageDistribution}
         kpis={{
           spikeCount: spikes.length,
           totalFirmBillable,
@@ -183,4 +223,41 @@ export type SpikeRow = Spike & {
   display_number: string
   client_display: string
   mapped_category: string | null
+  lifecycleStage: string
+}
+
+export type LifecycleStage =
+  | "First month"
+  | "Early"
+  | "Middle"
+  | "Late"
+  | "Last month"
+  | "Single-month case"
+  | "Unknown"
+
+/** Bucket a spike's week_start into a coarse lifecycle stage relative to the
+ *  matter's first→last activity span. Buckets are intentionally coarse — the
+ *  user wants "first/last month vs. middle", not week-level precision. */
+function lifecycleStage(
+  weekStart: string,
+  firstWeek: string,
+  lastWeek: string,
+  spanWeeks: number,
+): LifecycleStage {
+  if (spanWeeks <= 4) return "Single-month case"
+
+  const w = new Date(weekStart).getTime()
+  const f = new Date(firstWeek).getTime()
+  const l = new Date(lastWeek).getTime()
+  const monthMs = 30.44 * 24 * 60 * 60 * 1000
+
+  if (w - f < monthMs) return "First month"
+  if (l - w < monthMs) return "Last month"
+
+  const span = l - f
+  if (span <= 0) return "Middle"
+  const pos = (w - f) / span // 0..1
+  if (pos < 0.33) return "Early"
+  if (pos > 0.66) return "Late"
+  return "Middle"
 }

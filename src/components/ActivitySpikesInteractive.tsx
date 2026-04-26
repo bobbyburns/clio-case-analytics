@@ -55,12 +55,20 @@ type SortKey =
   | "rule"
   | "suggestedSurcharge"
 
+interface StageBucket {
+  stage: string
+  spikeCount: number
+  spikeBillable: number
+  pctOfSpikes: number
+}
+
 interface Props {
   spikes: SpikeRow[]
   firmWeekly: Array<{ week: string; billable: number; rolling4: number }>
   spikeWeekSet: string[]
   initialRatio: number
   initialFloor: number
+  stageDistribution: StageBucket[]
   kpis: KpiBundle
 }
 
@@ -70,6 +78,7 @@ export function ActivitySpikesInteractive({
   spikeWeekSet,
   initialRatio,
   initialFloor,
+  stageDistribution,
   kpis,
 }: Props) {
   const router = useRouter()
@@ -93,6 +102,7 @@ export function ActivitySpikesInteractive({
   const [minBillable, setMinBillable] = useState<string>("")
   const [minRatio, setMinRatio] = useState<string>("")
   const [ruleFilter, setRuleFilter] = useState<"all" | "ratio" | "absolute">("all")
+  const [stageFilter, setStageFilter] = useState<string>("")
 
   // Keyword search (server-side)
   const [keyword, setKeyword] = useState("")
@@ -141,7 +151,9 @@ export function ActivitySpikesInteractive({
     setKeywordError(null)
     const handle = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/spike-keyword?q=${encodeURIComponent(trimmed)}`)
+        const res = await fetch(
+          `/api/spike-keyword?q=${encodeURIComponent(trimmed)}&floor=${encodeURIComponent(floor)}`,
+        )
         const data = await res.json()
         if (reqId !== keywordReqRef.current) return // stale
         if (!res.ok) {
@@ -159,7 +171,7 @@ export function ActivitySpikesInteractive({
       }
     }, 300)
     return () => clearTimeout(handle)
-  }, [keyword])
+  }, [keyword, floor])
 
   const toggleSort = useCallback(
     (key: SortKey) => {
@@ -186,6 +198,7 @@ export function ActivitySpikesInteractive({
       if (s.billable < minB) return false
       if (Number.isFinite(s.ratio) && s.ratio < minR) return false
       if (ruleFilter !== "all" && s.rule !== ruleFilter) return false
+      if (stageFilter && s.lifecycleStage !== stageFilter) return false
       if (keywordMatches !== null) {
         const k = `${s.matter_unique_id}__${s.week_start}`
         if (!keywordMatches.has(k)) return false
@@ -234,6 +247,7 @@ export function ActivitySpikesInteractive({
     minBillable,
     minRatio,
     ruleFilter,
+    stageFilter,
     keywordMatches,
     sortKey,
     sortDir,
@@ -248,6 +262,7 @@ export function ActivitySpikesInteractive({
     minBillable !== "" ||
     minRatio !== "" ||
     ruleFilter !== "all" ||
+    stageFilter !== "" ||
     keyword.trim() !== ""
 
   const clearAllFilters = () => {
@@ -257,6 +272,7 @@ export function ActivitySpikesInteractive({
     setMinBillable("")
     setMinRatio("")
     setRuleFilter("all")
+    setStageFilter("")
     setKeyword("")
   }
 
@@ -482,6 +498,65 @@ export function ActivitySpikesInteractive({
 
       <FirmWeeklyBillableChart data={firmWeekly} spikeWeeks={spikeWeekLookup} />
 
+      {/* Spike timing — when in a matter's lifecycle do spikes happen? */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Spike timing — when do spikes happen?</CardTitle>
+          <p className="text-xs text-muted-foreground mt-1">
+            Each spike is bucketed by where it falls in its matter&rsquo;s lifecycle (first
+            activity → last activity). &ldquo;First month&rdquo; means within ~30 days of the
+            matter&rsquo;s first activity; &ldquo;Last month&rdquo; means within ~30 days of
+            the most recent. Click a row to filter the spike list to that stage.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-2">
+            {stageDistribution.map((b) => {
+              const active = stageFilter === b.stage
+              const widthPct = Math.max(0, Math.min(100, b.pctOfSpikes))
+              return (
+                <button
+                  key={b.stage}
+                  type="button"
+                  onClick={() => setStageFilter(active ? "" : b.stage)}
+                  className={`w-full text-left rounded-md border px-3 py-2 transition ${
+                    active
+                      ? "border-blue-400 bg-blue-50"
+                      : "border-border hover:bg-muted/40"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-3 text-sm">
+                    <span className="font-medium">{b.stage}</span>
+                    <span className="text-muted-foreground tabular-nums">
+                      {formatNumber(b.spikeCount)} spike{b.spikeCount === 1 ? "" : "s"} ·{" "}
+                      {formatCurrency(b.spikeBillable)} ·{" "}
+                      <span className="font-semibold text-foreground">
+                        {b.pctOfSpikes.toFixed(1)}%
+                      </span>
+                    </span>
+                  </div>
+                  <div className="mt-1.5 h-1.5 w-full bg-muted rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full ${
+                        active ? "bg-blue-600" : "bg-blue-400/70"
+                      }`}
+                      style={{ width: `${widthPct}%` }}
+                    />
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+          <p className="mt-3 text-xs text-muted-foreground">
+            Patterns to look for: a heavy <strong>First-month</strong> share suggests
+            front-loaded discovery / intake costs (consider a higher initial downpayment).
+            A heavy <strong>Last-month</strong> share suggests trial / settlement crunches
+            (consider an event surcharge for trial weeks). A flat distribution suggests
+            steady, unpredictable bursts throughout the case.
+          </p>
+        </CardContent>
+      </Card>
+
       {/* Spike list with filters + sort + keyword search */}
       <Card>
         <CardHeader className="pb-3">
@@ -551,7 +626,7 @@ export function ActivitySpikesInteractive({
           </div>
 
           {/* Column filter row */}
-          <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
+          <div className="grid grid-cols-2 md:grid-cols-7 gap-2">
             <Input
               placeholder="Matter #"
               value={matterFilter}
@@ -600,6 +675,18 @@ export function ActivitySpikesInteractive({
               <option value="ratio">ratio (≥8 weeks of data)</option>
               <option value="absolute">absolute (sparse baseline)</option>
             </select>
+            <select
+              value={stageFilter}
+              onChange={(e) => setStageFilter(e.target.value)}
+              className="h-9 rounded-md border border-input bg-background px-2 text-xs"
+            >
+              <option value="">All stages</option>
+              {stageDistribution.map((b) => (
+                <option key={b.stage} value={b.stage}>
+                  {b.stage}
+                </option>
+              ))}
+            </select>
           </div>
 
           <Table>
@@ -640,12 +727,13 @@ export function ActivitySpikesInteractive({
                   title="Spike billable minus baseline. Roughly: extra you'd need to charge to break even on this week."
                 />
                 <SortHeader label="Rule" k="rule" sortKey={sortKey} sortDir={sortDir} onClick={() => toggleSort("rule")} />
+                <TableHead title="When in the matter's lifecycle this spike happened">Stage</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {visibleSpikes.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={11} className="text-center py-8 text-sm text-muted-foreground">
+                  <TableCell colSpan={12} className="text-center py-8 text-sm text-muted-foreground">
                     No spikes match the current filters.
                   </TableCell>
                 </TableRow>
@@ -874,11 +962,12 @@ function SpikeRowExpander({
             {spike.rule}
           </span>
         </TableCell>
+        <TableCell className="text-xs text-muted-foreground">{spike.lifecycleStage}</TableCell>
       </TableRow>
 
       {isExpanded && (
         <TableRow>
-          <TableCell colSpan={11} className="bg-muted/30 p-4">
+          <TableCell colSpan={12} className="bg-muted/30 p-4">
             {isLoading ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2 className="size-4 animate-spin" /> Loading activities…
