@@ -62,6 +62,19 @@ interface StageBucket {
   pctOfSpikes: number
 }
 
+interface CategoryTally {
+  category: string
+  count: number
+  total: number
+}
+
+interface TypeSplit {
+  timeCount: number
+  expenseCount: number
+  timeTotal: number
+  expenseTotal: number
+}
+
 interface Props {
   spikes: SpikeRow[]
   firmWeekly: Array<{ week: string; billable: number; rolling4: number }>
@@ -69,6 +82,10 @@ interface Props {
   initialRatio: number
   initialFloor: number
   stageDistribution: StageBucket[]
+  initialTriggerKeywords: TriggerKeyword[]
+  initialExpenseCategories: CategoryTally[]
+  initialTypeSplit: TypeSplit
+  leaderboardSampleSize: number
   kpis: KpiBundle
 }
 
@@ -79,8 +96,13 @@ export function ActivitySpikesInteractive({
   initialRatio,
   initialFloor,
   stageDistribution,
+  initialTriggerKeywords,
+  initialExpenseCategories,
+  initialTypeSplit,
+  leaderboardSampleSize,
   kpis,
 }: Props) {
+  const [spikeListOpen, setSpikeListOpen] = useState(false)
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -306,52 +328,74 @@ export function ActivitySpikesInteractive({
     [expandedKey, drilldownByKey],
   )
 
-  const triggerKeywords: TriggerKeyword[] = useMemo(() => {
+  // Combine the server-precomputed leaderboard (top 100 spikes) with any
+  // additional rows the user has expanded since page load. Expanded rows
+  // augment the keyword sample but the server precompute is the floor.
+  const expandedActivities = useMemo(() => {
     const all: SpikeActivityRow[] = []
     for (const arr of Object.values(drilldownByKey)) all.push(...arr)
-    return tokenizeTriggers(all).slice(0, 25)
+    return all
   }, [drilldownByKey])
 
+  const triggerKeywords: TriggerKeyword[] = useMemo(() => {
+    if (expandedActivities.length === 0) return initialTriggerKeywords
+    const merged = tokenizeTriggers(expandedActivities)
+    // Merge by stemmed keyword, summing counts/billable.
+    const byKw = new Map<string, TriggerKeyword>()
+    for (const k of initialTriggerKeywords) byKw.set(k.keyword, { ...k })
+    for (const k of merged) {
+      const cur = byKw.get(k.keyword)
+      if (cur) {
+        cur.count += k.count
+        cur.totalBillable += k.totalBillable
+      } else {
+        byKw.set(k.keyword, { ...k })
+      }
+    }
+    return Array.from(byKw.values())
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 25)
+  }, [expandedActivities, initialTriggerKeywords])
+
   const expenseCategoryTally = useMemo(() => {
+    if (expandedActivities.length === 0) return initialExpenseCategories
     const tally = new Map<string, { count: number; total: number }>()
-    for (const arr of Object.values(drilldownByKey)) {
-      for (const a of arr) {
-        const key = a.expense_category ?? "—"
-        const cur = tally.get(key)
-        if (cur) {
-          cur.count++
-          cur.total += a.billable_amount
-        } else {
-          tally.set(key, { count: 1, total: a.billable_amount })
-        }
+    for (const c of initialExpenseCategories) {
+      tally.set(c.category, { count: c.count, total: c.total })
+    }
+    for (const a of expandedActivities) {
+      const key = a.expense_category ?? "—"
+      const cur = tally.get(key)
+      if (cur) {
+        cur.count++
+        cur.total += a.billable_amount
+      } else {
+        tally.set(key, { count: 1, total: a.billable_amount })
       }
     }
     return Array.from(tally.entries())
       .map(([category, v]) => ({ category, count: v.count, total: v.total }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 8)
-  }, [drilldownByKey])
+  }, [expandedActivities, initialExpenseCategories])
 
   const typeTally = useMemo(() => {
-    let timeCount = 0
-    let expenseCount = 0
-    let timeTotal = 0
-    let expenseTotal = 0
-    for (const arr of Object.values(drilldownByKey)) {
-      for (const a of arr) {
-        if (a.type === "TimeEntry") {
-          timeCount++
-          timeTotal += a.billable_amount
-        } else {
-          expenseCount++
-          expenseTotal += a.billable_amount
-        }
+    if (expandedActivities.length === 0) return initialTypeSplit
+    let { timeCount, expenseCount, timeTotal, expenseTotal } = initialTypeSplit
+    for (const a of expandedActivities) {
+      if (a.type === "TimeEntry") {
+        timeCount++
+        timeTotal += a.billable_amount
+      } else {
+        expenseCount++
+        expenseTotal += a.billable_amount
       }
     }
     return { timeCount, expenseCount, timeTotal, expenseTotal }
-  }, [drilldownByKey])
+  }, [expandedActivities, initialTypeSplit])
 
   const drilldownRowsLoaded = Object.keys(drilldownByKey).length
+  const leaderboardSampleTotal = leaderboardSampleSize + drilldownRowsLoaded
 
   return (
     <div className="space-y-6">
@@ -557,25 +601,38 @@ export function ActivitySpikesInteractive({
         </CardContent>
       </Card>
 
-      {/* Spike list with filters + sort + keyword search */}
+      {/* Spike list with filters + sort + keyword search — collapsed by default */}
       <Card>
         <CardHeader className="pb-3">
           <div className="flex items-start justify-between gap-4 flex-wrap">
-            <div>
-              <CardTitle className="text-base">
-                Spike list ({formatNumber(filteredSorted.length)}
-                {filteredSorted.length !== spikes.length && (
-                  <span className="text-muted-foreground font-normal">
-                    {" "}of {formatNumber(spikes.length)}
-                  </span>
-                )}
-                )
-              </CardTitle>
-              <p className="text-xs text-muted-foreground mt-1">
-                Click a row to load the activities for that week. Click column headers to sort.
-              </p>
-            </div>
-            {filtersActive && (
+            <button
+              type="button"
+              onClick={() => setSpikeListOpen((v) => !v)}
+              className="flex items-start gap-2 text-left flex-1"
+            >
+              {spikeListOpen ? (
+                <ChevronDown className="size-4 mt-0.5" />
+              ) : (
+                <ChevronRight className="size-4 mt-0.5" />
+              )}
+              <div>
+                <CardTitle className="text-base">
+                  Spike list ({formatNumber(filteredSorted.length)}
+                  {filteredSorted.length !== spikes.length && (
+                    <span className="text-muted-foreground font-normal">
+                      {" "}of {formatNumber(spikes.length)}
+                    </span>
+                  )}
+                  )
+                </CardTitle>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {spikeListOpen
+                    ? "Click a row to load the activities for that week. Click column headers to sort."
+                    : "Click to expand the matter-level spike list. Useful for drilling into specific cases — but the patterns above (timing, leaderboard) are usually more actionable."}
+                </p>
+              </div>
+            </button>
+            {spikeListOpen && filtersActive && (
               <Button
                 variant="ghost"
                 size="sm"
@@ -587,6 +644,7 @@ export function ActivitySpikesInteractive({
             )}
           </div>
         </CardHeader>
+        {spikeListOpen && (
         <CardContent className="space-y-3">
           {/* Keyword search */}
           <div className="flex items-center gap-2">
@@ -765,6 +823,7 @@ export function ActivitySpikesInteractive({
             </p>
           )}
         </CardContent>
+        )}
       </Card>
 
       {/* Trigger leaderboard */}
@@ -772,9 +831,12 @@ export function ActivitySpikesInteractive({
         <CardHeader className="pb-3">
           <CardTitle className="text-base">Trigger Leaderboard</CardTitle>
           <p className="text-xs text-muted-foreground">
-            Computed across the spike rows you&rsquo;ve expanded. Open more rows above
-            to grow the keyword sample. Currently sampling {drilldownRowsLoaded.toLocaleString()}{" "}
-            spike-week{drilldownRowsLoaded === 1 ? "" : "s"}.
+            Precomputed across the top {leaderboardSampleSize.toLocaleString()} spikes by
+            billable. Expanding more rows below adds to the sample
+            {drilldownRowsLoaded > 0 ? (
+              <> (currently {leaderboardSampleTotal.toLocaleString()} spike-weeks sampled)</>
+            ) : null}
+            . Click a keyword to filter the spike list to weeks containing it.
           </p>
         </CardHeader>
         <CardContent>
@@ -785,9 +847,7 @@ export function ActivitySpikesInteractive({
               </h3>
               {triggerKeywords.length === 0 ? (
                 <p className="text-xs text-muted-foreground italic">
-                  Expand a spike row to see keywords. Keywords are extracted from the
-                  description field of each activity (e.g. &ldquo;deposition prep&rdquo;
-                  → &ldquo;deposition&rdquo;, &ldquo;prep&rdquo;).
+                  No keywords found in the sampled spike-week activities.
                 </p>
               ) : (
                 <ul className="space-y-1 text-xs">
@@ -817,7 +877,7 @@ export function ActivitySpikesInteractive({
               </h3>
               {expenseCategoryTally.length === 0 ? (
                 <p className="text-xs text-muted-foreground italic">
-                  Expand a spike row to populate.
+                  No expense categories in the sampled spike-week activities.
                 </p>
               ) : (
                 <ul className="space-y-1 text-xs">
@@ -839,7 +899,7 @@ export function ActivitySpikesInteractive({
               </h3>
               {typeTally.timeCount + typeTally.expenseCount === 0 ? (
                 <p className="text-xs text-muted-foreground italic">
-                  Expand a spike row to populate.
+                  No activities sampled.
                 </p>
               ) : (
                 <ul className="space-y-1 text-xs">

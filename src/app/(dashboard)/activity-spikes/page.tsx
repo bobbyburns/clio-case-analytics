@@ -3,13 +3,17 @@ import {
   parseFilters,
   fetchMatters,
   fetchMatterWeeklyBillable,
+  fetchSpikeActivities,
+  type SpikeActivityRow,
 } from "@/lib/queries"
 import {
   computeMatterBaselines,
   detectSpikes,
   aggregateFirmWeekly,
   currentIsoWeekStart,
+  tokenizeTriggers,
   type Spike,
+  type TriggerKeyword,
 } from "@/lib/spikes"
 import { ActivitySpikesInteractive } from "@/components/ActivitySpikesInteractive"
 import { AIChatAssistant } from "@/components/AIChatAssistant"
@@ -133,6 +137,19 @@ export default async function ActivitySpikesPage({
     }
   })
 
+  // Precompute Trigger Leaderboard server-side across the top 100 spikes by
+  // billable. Without this, the leaderboard stays empty until the user clicks
+  // open individual rows — which they correctly noted is unusable.
+  const TOP_FOR_LEADERBOARD = 100
+  const leaderboardSpikes = spikeRows.slice(0, TOP_FOR_LEADERBOARD)
+  const leaderboardActivities = await fetchActivitiesBatched(supabase, leaderboardSpikes)
+  const initialTriggerKeywords = tokenizeTriggers(leaderboardActivities).slice(0, 25)
+  const initialExpenseCategories = aggregateExpenseCategories(leaderboardActivities)
+  const initialTypeSplit = aggregateTypeSplit(leaderboardActivities)
+  console.log(
+    `[activity-spikes] leaderboard precomputed across ${leaderboardSpikes.length} spikes / ${leaderboardActivities.length} activities`,
+  )
+
   // Firm-wide weekly aggregation (using the unfiltered matter-week rollup so the
   // chart shows firm-wide trends, not just the case-type filter scope).
   const firmWeekly = aggregateFirmWeekly(inScopeWeeks).filter(
@@ -202,6 +219,10 @@ Trigger keywords are computed client-side from the description field across all 
         initialRatio={ratioThreshold}
         initialFloor={absoluteFloor}
         stageDistribution={stageDistribution}
+        initialTriggerKeywords={initialTriggerKeywords}
+        initialExpenseCategories={initialExpenseCategories}
+        initialTypeSplit={initialTypeSplit}
+        leaderboardSampleSize={leaderboardSpikes.length}
         kpis={{
           spikeCount: spikes.length,
           totalFirmBillable,
@@ -234,6 +255,75 @@ export type LifecycleStage =
   | "Last month"
   | "Single-month case"
   | "Unknown"
+
+export interface CategoryTally {
+  category: string
+  count: number
+  total: number
+}
+
+export interface TypeSplit {
+  timeCount: number
+  expenseCount: number
+  timeTotal: number
+  expenseTotal: number
+}
+
+/** Fetch activities for many spike weeks in parallel with bounded concurrency,
+ *  so the Trigger Leaderboard can be precomputed at page-render time. */
+async function fetchActivitiesBatched(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  spikes: Array<{ matter_unique_id: string; week_start: string }>,
+  concurrency = 10,
+): Promise<SpikeActivityRow[]> {
+  if (spikes.length === 0) return []
+  const all: SpikeActivityRow[] = []
+  for (let i = 0; i < spikes.length; i += concurrency) {
+    const batch = spikes.slice(i, i + concurrency)
+    const results = await Promise.all(
+      batch.map((s) =>
+        fetchSpikeActivities(supabase, s.matter_unique_id, s.week_start).catch(() => [] as SpikeActivityRow[]),
+      ),
+    )
+    for (const arr of results) all.push(...arr)
+  }
+  return all
+}
+
+function aggregateExpenseCategories(rows: SpikeActivityRow[]): CategoryTally[] {
+  const tally = new Map<string, { count: number; total: number }>()
+  for (const a of rows) {
+    const key = a.expense_category ?? "—"
+    const cur = tally.get(key)
+    if (cur) {
+      cur.count++
+      cur.total += a.billable_amount
+    } else {
+      tally.set(key, { count: 1, total: a.billable_amount })
+    }
+  }
+  return Array.from(tally.entries())
+    .map(([category, v]) => ({ category, count: v.count, total: v.total }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 8)
+}
+
+function aggregateTypeSplit(rows: SpikeActivityRow[]): TypeSplit {
+  let timeCount = 0
+  let expenseCount = 0
+  let timeTotal = 0
+  let expenseTotal = 0
+  for (const a of rows) {
+    if (a.type === "TimeEntry") {
+      timeCount++
+      timeTotal += a.billable_amount
+    } else {
+      expenseCount++
+      expenseTotal += a.billable_amount
+    }
+  }
+  return { timeCount, expenseCount, timeTotal, expenseTotal }
+}
 
 /** Bucket a spike's week_start into a coarse lifecycle stage relative to the
  *  matter's first→last activity span. Buckets are intentionally coarse — the
