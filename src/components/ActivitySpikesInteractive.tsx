@@ -1160,8 +1160,17 @@ function SpikeRowExpander({
             ) : drillError ? (
               <p className="text-sm text-rose-700">Error: {drillError}</p>
             ) : drilldown && drilldown.length > 0 ? (
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
+              <div className="w-full">
+                <table className="w-full text-xs table-fixed">
+                  <colgroup>
+                    <col className="w-[88px]" />
+                    <col className="w-[60px]" />
+                    <col className="w-[120px]" />
+                    <col />
+                    <col className="w-[60px]" />
+                    <col className="w-[72px]" />
+                    <col className="w-[88px]" />
+                  </colgroup>
                   <thead>
                     <tr className="text-left text-muted-foreground">
                       <th className="pr-3 py-1">Date</th>
@@ -1175,17 +1184,19 @@ function SpikeRowExpander({
                   </thead>
                   <tbody>
                     {drilldown.map((a, i) => (
-                      <tr key={`${rowKey}-${i}`} className="border-t border-border/40">
+                      <tr key={`${rowKey}-${i}`} className="border-t border-border/40 align-top">
                         <td className="pr-3 py-1 font-mono">{a.activity_date ?? "—"}</td>
                         <td className="pr-3 py-1">
                           {a.type === "TimeEntry" ? "Time" : "Expense"}
                         </td>
-                        <td className="pr-3 py-1">{a.user_name ?? "—"}</td>
+                        <td className="pr-3 py-1 truncate" title={a.user_name ?? ""}>
+                          {a.user_name ?? "—"}
+                        </td>
                         <td
-                          className="pr-3 py-1 max-w-md"
+                          className="pr-3 py-1 break-words whitespace-normal"
                           title={a.description ?? ""}
                         >
-                          <span className="block truncate">{a.description ?? "—"}</span>
+                          {a.description ?? "—"}
                         </td>
                         <td className="pr-3 py-1 text-right tabular-nums">{a.hours.toFixed(2)}</td>
                         <td className="pr-3 py-1 text-right tabular-nums">{formatCurrency(a.rate)}</td>
