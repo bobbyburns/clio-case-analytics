@@ -29,9 +29,10 @@ import { KPICard } from "@/components/charts/KPICard"
 import { FirmWeeklyBillableChart } from "@/components/charts/ActivitySpikesCharts"
 import { SpikeExplainer } from "@/components/SpikeExplainer"
 import { SpikeEventAnalysis } from "@/components/SpikeEventAnalysis"
+import { SpikeMetaDashboard } from "@/components/SpikeMetaDashboard"
 import { formatCurrency, formatNumber } from "@/lib/utils/format"
 import { tokenizeTriggers, type TriggerKeyword } from "@/lib/spikes"
-import type { SpikeRow } from "@/app/(dashboard)/activity-spikes/page"
+import type { SpikeRow, StoredSpikeAnalysis } from "@/app/(dashboard)/activity-spikes/page"
 import type { SpikeActivityRow } from "@/lib/queries"
 
 interface KpiBundle {
@@ -105,6 +106,24 @@ export function ActivitySpikesInteractive({
   kpis,
 }: Props) {
   const [spikeListOpen, setSpikeListOpen] = useState(false)
+
+  // In-session AI analyses: anything analyzed during this page-load is held
+  // here, layered over the SSR-loaded storedAnalysis on each row. Both the
+  // bulk and per-row analysis paths write into this map so badges/rows update
+  // immediately without a full page reload.
+  const [sessionAnalyses, setSessionAnalyses] = useState<Map<string, StoredSpikeAnalysis>>(
+    new Map(),
+  )
+  const upsertSessionAnalysis = useCallback(
+    (key: string, analysis: StoredSpikeAnalysis) => {
+      setSessionAnalyses((prev) => {
+        const next = new Map(prev)
+        next.set(key, analysis)
+        return next
+      })
+    },
+    [],
+  )
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -277,7 +296,12 @@ export function ActivitySpikesInteractive({
     sortDir,
   ])
 
-  const visibleSpikes = filteredSorted.slice(0, 200)
+  const visibleSpikes = filteredSorted.slice(0, 200).map((s) => {
+    const key = `${s.matter_unique_id}__${s.week_start}`
+    const live = sessionAnalyses.get(key)
+    if (!live) return s
+    return { ...s, storedAnalysis: live }
+  })
 
   const filtersActive =
     matterFilter !== "" ||
@@ -604,7 +628,13 @@ export function ActivitySpikesInteractive({
       </Card>
 
       {/* AI-powered event classification across the top 50 spikes */}
-      <SpikeEventAnalysis topSpikes={spikes.slice(0, 50)} />
+      <SpikeEventAnalysis
+        topSpikes={spikes.slice(0, 50)}
+        onAnalysisComplete={upsertSessionAnalysis}
+      />
+
+      {/* Second-pass meta-analysis: surcharge strategy across all classified spikes */}
+      <SpikeMetaDashboard spikes={spikes} sessionAnalyses={sessionAnalyses} />
 
       {/* Spike list with filters + sort + keyword search — collapsed by default */}
       <Card>
@@ -830,6 +860,7 @@ export function ActivitySpikesInteractive({
                       drilldown={drilldown}
                       drillError={isExpanded ? drillError : null}
                       onToggle={() => toggleExpand(s.matter_unique_id, s.week_start)}
+                      onAnalysisComplete={upsertSessionAnalysis}
                     />
                   )
                 })
@@ -997,6 +1028,7 @@ function SpikeRowExpander({
   drilldown,
   drillError,
   onToggle,
+  onAnalysisComplete,
 }: {
   rowKey: string
   spike: SpikeRow & {
@@ -1009,6 +1041,7 @@ function SpikeRowExpander({
   drilldown: SpikeActivityRow[] | undefined
   drillError: string | null
   onToggle: () => void
+  onAnalysisComplete: (key: string, analysis: StoredSpikeAnalysis) => void
 }) {
   const surcharge = Math.max(0, spike.billable - spike.baselineMedian)
   const [aiLoading, setAiLoading] = useState(false)
@@ -1067,6 +1100,15 @@ function SpikeRowExpander({
         return
       }
       setAiResult(first)
+      // Lift this analysis into the parent so the spike list badge and any
+      // other expansion of the same row reflect it without a page reload.
+      onAnalysisComplete(`${spike.matter_unique_id}__${spike.week_start}`, {
+        primary_event: first.primary_event,
+        secondary_events: first.secondary_events ?? [],
+        narrative: first.narrative ?? "",
+        evidence_quotes: first.evidence_quotes ?? [],
+        analyzed_at: new Date().toISOString(),
+      })
     } catch (e) {
       setAiError(e instanceof Error ? e.message : String(e))
     } finally {

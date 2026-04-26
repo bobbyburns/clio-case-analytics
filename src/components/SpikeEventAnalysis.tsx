@@ -5,7 +5,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Loader2, Sparkles, ChevronDown, ChevronRight } from "lucide-react"
 import { formatCurrency, formatNumber } from "@/lib/utils/format"
-import type { SpikeRow } from "@/app/(dashboard)/activity-spikes/page"
+import type { SpikeRow, StoredSpikeAnalysis } from "@/app/(dashboard)/activity-spikes/page"
+
+const BATCH_SIZE = 10
 
 interface SpikeAnalysisRow {
   matter_unique_id: string
@@ -23,13 +25,6 @@ interface AggregateInsight {
   total_billable: number
   example_matters: string[]
   pattern_notes: string
-}
-
-interface AnalysisResult {
-  analyzedCount: number
-  totalActivities: number
-  spikes: SpikeAnalysisRow[]
-  aggregate: AggregateInsight[]
 }
 
 const EVENT_COLORS = [
@@ -53,55 +48,159 @@ function colorFor(event: string, palette: Map<string, string>): string {
   return next
 }
 
-interface Props {
-  topSpikes: SpikeRow[]
+interface Progress {
+  current: number
+  total: number
 }
 
-export function SpikeEventAnalysis({ topSpikes }: Props) {
+interface Props {
+  topSpikes: SpikeRow[]
+  onAnalysisComplete: (key: string, analysis: StoredSpikeAnalysis) => void
+}
+
+export function SpikeEventAnalysis({ topSpikes, onAnalysisComplete }: Props) {
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [progress, setProgress] = useState<Progress | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [result, setResult] = useState<AnalysisResult | null>(null)
+  const [perSpike, setPerSpike] = useState<SpikeAnalysisRow[]>([])
+  const [analyzedCount, setAnalyzedCount] = useState(0)
+  const [totalActivities, setTotalActivities] = useState(0)
+
+  const inScope = topSpikes.slice(0, 50)
+  const billableByKey = new Map<string, number>()
+  for (const s of inScope) {
+    billableByKey.set(`${s.matter_unique_id}__${s.week_start}`, s.billable)
+  }
 
   const runAnalysis = async () => {
     setLoading(true)
     setError(null)
+    setPerSpike([])
+    setAnalyzedCount(0)
+    setTotalActivities(0)
+
+    const total = inScope.length
+    const batches: SpikeRow[][] = []
+    for (let i = 0; i < total; i += BATCH_SIZE) {
+      batches.push(inScope.slice(i, i + BATCH_SIZE))
+    }
+    setProgress({ current: 0, total })
+
+    const accumulated: SpikeAnalysisRow[] = []
+    let activitiesSeen = 0
+    let analyzedSoFar = 0
+
     try {
-      const payload = topSpikes.slice(0, 50).map((s) => ({
-        matter_unique_id: s.matter_unique_id,
-        week_start: s.week_start,
-        display_number: s.display_number,
-        client_display: s.client_display,
-        billable: s.billable,
-        ratio: Number.isFinite(s.ratio) ? s.ratio : 0,
-        hours: s.hours,
-      }))
-      const res = await fetch("/api/analyze-spikes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ spikes: payload }),
-      })
-      const data = await res.json()
-      if (!res.ok) {
-        setError(data.error ?? `HTTP ${res.status}`)
-      } else {
-        setResult(data)
+      for (let b = 0; b < batches.length; b++) {
+        const batch = batches[b]
+        const payload = batch.map((s) => ({
+          matter_unique_id: s.matter_unique_id,
+          week_start: s.week_start,
+          display_number: s.display_number,
+          client_display: s.client_display,
+          billable: s.billable,
+          ratio: Number.isFinite(s.ratio) ? s.ratio : 0,
+          hours: s.hours,
+        }))
+        const res = await fetch("/api/analyze-spikes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ spikes: payload }),
+        })
+        const text = await res.text()
+        let data: {
+          spikes?: SpikeAnalysisRow[]
+          error?: string
+          analyzedCount?: number
+          totalActivities?: number
+        }
+        try {
+          data = JSON.parse(text)
+        } catch {
+          throw new Error(
+            `Batch ${b + 1}/${batches.length} returned non-JSON (HTTP ${res.status}): ${text.slice(0, 200)}`,
+          )
+        }
+        if (!res.ok) {
+          throw new Error(data.error ?? `Batch ${b + 1} failed (HTTP ${res.status})`)
+        }
+        const rows = data.spikes ?? []
+        accumulated.push(...rows)
+        activitiesSeen += data.totalActivities ?? 0
+        analyzedSoFar += data.analyzedCount ?? rows.length
+
+        // Lift each row up to the parent so the spike list updates immediately
+        // (the API also persists to the DB, so this just synchronizes the
+        // in-memory view with what's been written).
+        for (const row of rows) {
+          onAnalysisComplete(`${row.matter_unique_id}__${row.week_start}`, {
+            primary_event: row.primary_event,
+            secondary_events: row.secondary_events ?? [],
+            narrative: row.narrative ?? "",
+            evidence_quotes: row.evidence_quotes ?? [],
+            analyzed_at: new Date().toISOString(),
+          })
+        }
+
+        setPerSpike([...accumulated])
+        setAnalyzedCount(analyzedSoFar)
+        setTotalActivities(activitiesSeen)
+        setProgress({
+          current: Math.min(total, analyzedSoFar),
+          total,
+        })
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setLoading(false)
+      setProgress(null)
     }
   }
 
-  const palette = new Map<string, string>()
-  if (result) {
-    // Pre-assign colors in aggregate order so legend matches the bars.
-    for (const a of result.aggregate) colorFor(a.event_type, palette)
-  }
+  // Build aggregate client-side from accumulated per-spike rows + the original
+  // spike billables. Each batch's API response already includes a per-batch
+  // aggregate but they're scoped to that batch; rolling up here gives the
+  // user the firm-wide view they want.
+  const aggregate: AggregateInsight[] = (() => {
+    if (perSpike.length === 0) return []
+    const by = new Map<
+      string,
+      { spike_count: number; total_billable: number; matters: Set<string> }
+    >()
+    for (const row of perSpike) {
+      const event = row.primary_event
+      const key = `${row.matter_unique_id}__${row.week_start}`
+      const billable = billableByKey.get(key) ?? 0
+      const cur = by.get(event)
+      if (cur) {
+        cur.spike_count++
+        cur.total_billable += billable
+        cur.matters.add(row.display_number)
+      } else {
+        by.set(event, {
+          spike_count: 1,
+          total_billable: billable,
+          matters: new Set([row.display_number]),
+        })
+      }
+    }
+    return Array.from(by.entries())
+      .map(([event_type, v]) => ({
+        event_type,
+        spike_count: v.spike_count,
+        total_billable: v.total_billable,
+        example_matters: Array.from(v.matters).slice(0, 4),
+        pattern_notes: "",
+      }))
+      .sort((a, b) => b.total_billable - a.total_billable)
+  })()
 
-  const maxAggregateBillable = result
-    ? Math.max(1, ...result.aggregate.map((a) => a.total_billable))
+  const palette = new Map<string, string>()
+  for (const a of aggregate) colorFor(a.event_type, palette)
+  const maxAggregateBillable = aggregate.length > 0
+    ? Math.max(1, ...aggregate.map((a) => a.total_billable))
     : 1
 
   return (
@@ -126,7 +225,10 @@ export function SpikeEventAnalysis({ topSpikes }: Props) {
               <p className="text-xs text-muted-foreground mt-1">
                 Reads the actual activity descriptions from the top 50 spikes and
                 classifies the underlying event (deposition, trial week, mediation,
-                discovery cycle, etc.) — not just keywords. Uses Claude.
+                discovery cycle, etc.) — not just keywords. Uses Claude. Runs in
+                batches of {BATCH_SIZE} so the request never times out and
+                progress is visible. Each row is saved to the database as it
+                completes.
               </p>
             </div>
           </button>
@@ -141,9 +243,11 @@ export function SpikeEventAnalysis({ topSpikes }: Props) {
               {loading ? (
                 <>
                   <Loader2 className="size-4 mr-2 animate-spin" />
-                  Analyzing…
+                  {progress
+                    ? `Batch ${Math.ceil(progress.current / BATCH_SIZE)} / ${Math.ceil(progress.total / BATCH_SIZE)}…`
+                    : "Analyzing…"}
                 </>
-              ) : result ? (
+              ) : perSpike.length > 0 ? (
                 "Re-analyze"
               ) : (
                 "Run analysis"
@@ -155,88 +259,95 @@ export function SpikeEventAnalysis({ topSpikes }: Props) {
       {open && (
         <CardContent className="space-y-6">
           {error && (
-            <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+            <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700 break-all">
               {error}
             </div>
           )}
 
-          {!result && !loading && !error && (
+          {!perSpike.length && !loading && !error && (
             <p className="text-sm text-muted-foreground">
-              Click <strong>Run analysis</strong> to send the top 50 spike weeks (with
-              their underlying activity records) to Claude. The model will infer the
-              actual event type behind each spike (e.g. &ldquo;Deposition&rdquo;,
-              &ldquo;Trial Week&rdquo;, &ldquo;Discovery Response Cycle&rdquo;) and
-              return a per-spike classification plus an aggregate event taxonomy. This
-              call typically takes 20–60 seconds and costs roughly a few cents.
+              Click <strong>Run analysis</strong> to send the top {inScope.length}{" "}
+              spike weeks to Claude in batches of {BATCH_SIZE}. Each batch finishes
+              in 10–20s; results stream into the table below as batches complete and
+              are saved to the database. Roughly a few cents per run.
             </p>
           )}
 
-          {loading && (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" />
-              Fetching {topSpikes.slice(0, 50).length} spike weeks of activities and
-              running classification…
+          {loading && progress && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">
+                  Analyzing batch {Math.ceil(progress.current / BATCH_SIZE)} of{" "}
+                  {Math.ceil(progress.total / BATCH_SIZE)} —{" "}
+                  {progress.current} / {progress.total} spikes complete
+                </span>
+                <span className="text-muted-foreground tabular-nums">
+                  {((progress.current / Math.max(1, progress.total)) * 100).toFixed(0)}%
+                </span>
+              </div>
+              <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-violet-500 transition-all"
+                  style={{ width: `${(progress.current / Math.max(1, progress.total)) * 100}%` }}
+                />
+              </div>
             </div>
           )}
 
-          {result && (
+          {perSpike.length > 0 && (
             <>
               <div className="text-xs text-muted-foreground">
-                Analyzed {result.analyzedCount.toLocaleString()} spike weeks across{" "}
-                {result.totalActivities.toLocaleString()} activity records.
+                Analyzed {analyzedCount.toLocaleString()} spike weeks across{" "}
+                {totalActivities.toLocaleString()} activity records.{" "}
+                Aggregate event types and per-spike rows below; all saved to the database.
               </div>
 
-              {/* Aggregate event taxonomy */}
+              {/* Aggregate event taxonomy (recomputed across all batches) */}
               <section>
                 <h3 className="font-semibold text-sm mb-2">Event taxonomy</h3>
                 <div className="space-y-2">
-                  {result.aggregate
-                    .sort((a, b) => b.total_billable - a.total_billable)
-                    .map((a) => {
-                      const cls = colorFor(a.event_type, palette)
-                      const widthPct = (a.total_billable / maxAggregateBillable) * 100
-                      return (
-                        <div key={a.event_type} className="border rounded-md p-3 bg-background">
-                          <div className="flex items-center justify-between gap-3 flex-wrap">
-                            <span
-                              className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-medium ${cls}`}
-                            >
-                              {a.event_type}
+                  {aggregate.map((a) => {
+                    const cls = colorFor(a.event_type, palette)
+                    const widthPct = (a.total_billable / maxAggregateBillable) * 100
+                    return (
+                      <div key={a.event_type} className="border rounded-md p-3 bg-background">
+                        <div className="flex items-center justify-between gap-3 flex-wrap">
+                          <span
+                            className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-medium ${cls}`}
+                          >
+                            {a.event_type}
+                          </span>
+                          <span className="text-xs text-muted-foreground tabular-nums">
+                            {formatNumber(a.spike_count)} spike{a.spike_count === 1 ? "" : "s"} ·{" "}
+                            <span className="font-semibold text-foreground">
+                              {formatCurrency(a.total_billable)}
                             </span>
-                            <span className="text-xs text-muted-foreground tabular-nums">
-                              {formatNumber(a.spike_count)} spike{a.spike_count === 1 ? "" : "s"} ·{" "}
-                              <span className="font-semibold text-foreground">
-                                {formatCurrency(a.total_billable)}
-                              </span>
-                            </span>
-                          </div>
-                          <div className="mt-1.5 h-1.5 w-full bg-muted rounded-full overflow-hidden">
-                            <div
-                              className="h-full rounded-full bg-violet-500/70"
-                              style={{ width: `${widthPct}%` }}
-                            />
-                          </div>
-                          <p className="text-xs text-muted-foreground mt-2">
-                            {a.pattern_notes}
-                          </p>
-                          {a.example_matters.length > 0 && (
-                            <p className="text-[11px] text-muted-foreground mt-1">
-                              Examples:{" "}
-                              <span className="font-mono">
-                                {a.example_matters.slice(0, 4).join(", ")}
-                              </span>
-                            </p>
-                          )}
+                          </span>
                         </div>
-                      )
-                    })}
+                        <div className="mt-1.5 h-1.5 w-full bg-muted rounded-full overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-violet-500/70"
+                            style={{ width: `${widthPct}%` }}
+                          />
+                        </div>
+                        {a.example_matters.length > 0 && (
+                          <p className="text-[11px] text-muted-foreground mt-2">
+                            Examples:{" "}
+                            <span className="font-mono">
+                              {a.example_matters.slice(0, 4).join(", ")}
+                            </span>
+                          </p>
+                        )}
+                      </div>
+                    )
+                  })}
                 </div>
               </section>
 
               {/* Per-spike classifications */}
               <section>
                 <h3 className="font-semibold text-sm mb-2">
-                  Per-spike classification ({result.spikes.length})
+                  Per-spike classification ({perSpike.length})
                 </h3>
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs">
@@ -249,7 +360,7 @@ export function SpikeEventAnalysis({ topSpikes }: Props) {
                       </tr>
                     </thead>
                     <tbody>
-                      {result.spikes.map((s, i) => (
+                      {perSpike.map((s, i) => (
                         <tr
                           key={`${s.matter_unique_id}-${s.week_start}-${i}`}
                           className="border-b align-top"
